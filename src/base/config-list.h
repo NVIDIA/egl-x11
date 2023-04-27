@@ -195,6 +195,11 @@ EGLint eplConfigListFindIndex(EplConfigList *list, EGLConfig config);
 
 const EplFormatInfo *eplFormatInfoLookup(uint32_t fourcc);
 
+static inline int eplFormatInfoDepth(const EplFormatInfo *fmt)
+{
+    return fmt->colors[0] + fmt->colors[1] + fmt->colors[2] + fmt->colors[3];
+}
+
 #ifdef __cplusplus
 }
 #endif
