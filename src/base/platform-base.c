@@ -49,7 +49,7 @@ static void DestroyDisplay(EplDisplay *pdpy);
  * A list of all EplDisplay structs.
  */
 static struct glvnd_list display_list = { &display_list, &display_list };
-static pthread_mutex_t display_list_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t display_list_mutex;
 
 /**
  * A list of all EplPlatformData structs.
@@ -58,6 +58,16 @@ static pthread_mutex_t display_list_mutex = PTHREAD_MUTEX_INITIALIZER;
  */
 static struct glvnd_list platform_data_list = { &platform_data_list, &platform_data_list };
 static pthread_mutex_t platform_data_list_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static __attribute__((constructor)) void LibraryInit(void)
+{
+    eplInitRecursiveMutex(&display_list_mutex);
+}
+
+static __attribute__((destructor)) void LibraryFini(void)
+{
+    pthread_mutex_destroy(&display_list_mutex);
+}
 
 PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
                                    const EGLExtDriver *driver,
