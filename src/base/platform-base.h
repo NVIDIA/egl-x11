@@ -56,6 +56,8 @@ typedef enum
  */
 typedef struct
 {
+    EplRefCount refcount;
+
     EGLDisplay edpy;
 
     /**
@@ -251,6 +253,7 @@ typedef struct _EplPlatformData
 } EplPlatformData;
 
 EPL_REFCOUNT_DECLARE_TYPE_FUNCS(EplPlatformData, eplPlatformData);
+EPL_REFCOUNT_DECLARE_TYPE_FUNCS(EplInternalDisplay, eplInternalDisplay);
 
 /**
  * Looks up an EglDisplay struct.

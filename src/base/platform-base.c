@@ -70,6 +70,7 @@ static __attribute__((destructor)) void LibraryFini(void)
 }
 
 EPL_REFCOUNT_DEFINE_TYPE_FUNCS(EplPlatformData, eplPlatformData, refcount, free);
+EPL_REFCOUNT_DEFINE_TYPE_FUNCS(EplInternalDisplay, eplInternalDisplay, refcount, free);
 
 PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
                                    const EGLExtDriver *driver,
@@ -227,7 +228,8 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
     {
         EplInternalDisplay *idpy = glvnd_list_first_entry(&platform->internal_display_list, EplInternalDisplay, entry);
         glvnd_list_del(&idpy->entry);
-        free(idpy);
+        idpy->edpy = EGL_NO_DISPLAY;
+        eplInternalDisplayUnref(idpy);
     }
 
     eplImplCleanupPlatform(platform);
@@ -366,9 +368,13 @@ EplInternalDisplay *eplLookupInternalDisplay(EplPlatformData *platform, EGLDispl
     if (found == NULL)
     {
         found = calloc(1, sizeof(EplInternalDisplay));
-        found->edpy = handle;
-        found->init_count = 0;
-        glvnd_list_add(&found->entry, &platform->internal_display_list);
+        if (found != NULL)
+        {
+            eplRefCountInit(&found->refcount);
+            found->edpy = handle;
+            found->init_count = 0;
+            glvnd_list_add(&found->entry, &platform->internal_display_list);
+        }
     }
     pthread_mutex_unlock(&platform->internal_display_list_mutex);
 
