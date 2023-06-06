@@ -34,6 +34,7 @@
 #include <eglexternalplatform.h>
 
 #include "glvnd_list.h"
+#include "refcountobj.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -74,12 +75,13 @@ typedef struct
  */
 typedef struct
 {
+    EplRefCount refcount;
+
     EGLSurface external_surface;
     EGLSurface internal_surface;
     EplSurfaceType type;
 
     EGLBoolean deleted;
-    unsigned int ref_count;
 
     /**
      * Private data used by the implementation.
@@ -94,6 +96,17 @@ typedef struct
  */
 typedef struct
 {
+    /**
+     * A reference count. This is used so that we know when it's safe to free
+     * EplDisplay struct.
+     *
+     * Since EGLDisplays can't be destroyed (yet), this only really matters if
+     * we go through teardown while another thread is still using the
+     * EplDisplay. It'll be more interesting once we add support for
+     * EGL_EXT_display_alloc.
+     */
+    EplRefCount refcount;
+
     /**
      * The external (application-facing) EGLDisplay handle.
      */
@@ -151,17 +164,6 @@ typedef struct
      * capped at 1.
      */
     unsigned int init_count;
-
-    /**
-     * A reference count. This is used so that we know when it's safe to free
-     * EplDisplay struct.
-     *
-     * Since EGLDisplays can't be destroyed (yet), this only really matters if
-     * we go through teardown while another thread is still using the
-     * EplDisplay. It'll be more interesting once we add support for
-     * EGL_EXT_display_alloc.
-     */
-    unsigned int ref_count;
 
     /**
      * This is a counter to keep track of whether the display is in use or not.

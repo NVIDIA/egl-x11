@@ -193,7 +193,7 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
     pthread_mutex_lock(&display_list_mutex);
     glvnd_list_for_each_entry_safe(pdpy, pdpyTmp, &display_list, entry)
     {
-        int refcount;
+        int shouldDestroy;
 
         if (pdpy->platform != platform)
         {
@@ -204,7 +204,7 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
 
         // Remove the display from the list and decrement its refcount.
         glvnd_list_del(&pdpy->entry);
-        refcount = --pdpy->ref_count;
+        shouldDestroy = eplRefCountUnref(&pdpy->refcount);
         pdpy->platform = NULL;
         pthread_mutex_unlock(&pdpy->mutex);
 
@@ -213,7 +213,7 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
         // TODO: Should we just unconditionally free the display here? If
         // another thread is in the middle of a function call, then it's going
         // to crash anyway.
-        if (refcount == 0)
+        if (shouldDestroy)
         {
             DestroyDisplay(pdpy);
         }
@@ -265,7 +265,7 @@ static EplDisplay *eplLockDisplayInternal(EGLDisplay edpy)
     }
 
     pthread_mutex_lock(&pdpy->mutex);
-    pdpy->ref_count++;
+    eplRefCountRef(&pdpy->refcount);
     pdpy->use_count++;
 
     pthread_mutex_unlock(&display_list_mutex);
@@ -300,7 +300,7 @@ static void DestroyAllSurfaces(EplDisplay *pdpy)
 
         // Bump the refcount, as if we'd called eglSurfaceAcquire, so that
         // eplSurfaceRelease works below.
-        psurf->ref_count++;
+        eplRefCountRef(&psurf->refcount);
 
         DeleteSurfaceCommon(pdpy, psurf);
         eplSurfaceRelease(pdpy, psurf);
@@ -310,7 +310,7 @@ static void DestroyAllSurfaces(EplDisplay *pdpy)
 static void DestroyDisplay(EplDisplay *pdpy)
 {
     assert(pdpy != NULL);
-    assert(pdpy->ref_count == 0);
+    assert(pdpy->refcount.refcount == 0);
     assert(pdpy->platform == NULL);
 
     DestroyAllSurfaces(pdpy);
@@ -322,8 +322,6 @@ static void DestroyDisplay(EplDisplay *pdpy)
 
 void eplDisplayRelease(EplDisplay *pdpy)
 {
-    EGLBoolean should_destroy = EGL_FALSE;
-
     if (pdpy == NULL)
     {
         return;
@@ -331,12 +329,9 @@ void eplDisplayRelease(EplDisplay *pdpy)
 
     pdpy->use_count--;
     CheckTerminateDisplay(pdpy);
-
-    pdpy->ref_count--;
-    should_destroy = (pdpy->ref_count == 0);
     pthread_mutex_unlock(&pdpy->mutex);
 
-    if (should_destroy)
+    if (eplRefCountUnref(&pdpy->refcount))
     {
         DestroyDisplay(pdpy);
     }
@@ -477,7 +472,7 @@ EplSurface *eplSurfaceAcquire(EplDisplay *pdpy, EGLSurface esurf)
 
     if (found != NULL)
     {
-        found->ref_count++;
+        eplRefCountRef(&found->refcount);
     }
 
     return found;
@@ -487,9 +482,7 @@ void eplSurfaceRelease(EplDisplay *pdpy, EplSurface *psurf)
 {
     if (psurf != NULL)
     {
-        psurf->ref_count--;
-
-        if (psurf->ref_count == 0)
+        if (eplRefCountUnref(&psurf->refcount))
         {
             // If the refcount is zero, then that means eglDestroySurface or
             // eglTerminate has already run, so the platform-specific code has
@@ -600,7 +593,7 @@ static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
         goto done;
     }
 
-    pdpy->ref_count = 1;
+    eplRefCountInit(&pdpy->refcount);
     glvnd_list_add(&pdpy->entry, &display_list);
     ret = pdpy->external_display;
 
@@ -783,7 +776,7 @@ static EGLSurface CommonCreateSurface(EplDisplay *pdpy,
     {
         psurf->external_surface = (EGLSurface) psurf;
         ret = psurf->external_surface;
-        psurf->ref_count = 1;
+        eplRefCountRef(&psurf->refcount);
         glvnd_list_add(&psurf->entry, &pdpy->surface_list);
     }
     else
@@ -897,14 +890,14 @@ static EGLSurface HookCreatePbufferSurface(EGLDisplay edpy, EGLConfig config, co
 static void DeleteSurfaceCommon(EplDisplay *pdpy, EplSurface *psurf)
 {
     assert(!psurf->deleted);
-    assert(psurf->ref_count >= 2);
 
     if (!psurf->deleted)
     {
         psurf->deleted = EGL_TRUE;
-        psurf->ref_count--;
         glvnd_list_del(&psurf->entry);
         eplImplDestroySurface(pdpy, psurf);
+
+        eplRefCountUnref(&psurf->refcount);
     }
 }
 
