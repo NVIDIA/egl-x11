@@ -185,6 +185,8 @@ typedef struct
 
 typedef struct _EplPlatformData
 {
+    EplRefCount refcount;
+
     struct {
         PFNEGLQUERYSTRINGPROC QueryString;
         PFNEGLGETPLATFORMDISPLAYPROC GetPlatformDisplay;
@@ -224,6 +226,20 @@ typedef struct _EplPlatformData
     } callbacks;
 
     /**
+     * True if we're going through teardown for this platform. Once we're in
+     * teardown, it's no longer safe to call into the driver.
+     *
+     * Note that if another thread is currently calling an EGL function when
+     * the platform library gets torn down, then things are likely to break no
+     * matter what, because the driver will have finished a lot of its teardown
+     * before the platform library finds out about it.
+     *
+     * Thus, this flag is only to make it easier to share cleanup code between
+     * platform library teardown and eglDestroySurface et. al.
+     */
+    EGLBoolean destroyed;
+
+    /**
      * Private data for the implementation.
      */
     EplImplPlatform *priv;
@@ -233,6 +249,8 @@ typedef struct _EplPlatformData
 
     struct glvnd_list entry;
 } EplPlatformData;
+
+EPL_REFCOUNT_DECLARE_TYPE_FUNCS(EplPlatformData, eplPlatformData);
 
 /**
  * Looks up an EglDisplay struct.

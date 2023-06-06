@@ -69,6 +69,8 @@ static __attribute__((destructor)) void LibraryFini(void)
     pthread_mutex_destroy(&display_list_mutex);
 }
 
+EPL_REFCOUNT_DEFINE_TYPE_FUNCS(EplPlatformData, eplPlatformData, refcount, free);
+
 PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
                                    const EGLExtDriver *driver,
                                    EGLExtPlatform *extplatform)
@@ -86,6 +88,7 @@ PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
     {
         return EGL_FALSE;
     }
+    eplRefCountInit(&platform->refcount);
 
     glvnd_list_init(&platform->entry);
     glvnd_list_init(&platform->internal_display_list);
@@ -139,7 +142,7 @@ PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
             || platform->egl.QueryDevicesEXT == NULL
             || platform->egl.QueryDisplayAttribEXT == NULL)
     {
-        free(platform);
+        eplPlatformDataUnref(platform);
         return EGL_FALSE;
     }
 
@@ -163,7 +166,7 @@ PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
 
     if (!eplImplInitPlatform(platform, major, minor, driver, extplatform))
     {
-        free(platform);
+        eplPlatformDataUnref(platform);
         return EGL_FALSE;
     }
 
@@ -188,13 +191,11 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
     glvnd_list_del(&platform->entry);
     pthread_mutex_unlock(&platform_data_list_mutex);
 
-    pthread_mutex_lock(&platform_data_list_mutex);
+    platform->destroyed = EGL_TRUE;
 
     pthread_mutex_lock(&display_list_mutex);
     glvnd_list_for_each_entry_safe(pdpy, pdpyTmp, &display_list, entry)
     {
-        int shouldDestroy;
-
         if (pdpy->platform != platform)
         {
             continue;
@@ -204,7 +205,7 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
 
         // Remove the display from the list and decrement its refcount.
         glvnd_list_del(&pdpy->entry);
-        shouldDestroy = eplRefCountUnref(&pdpy->refcount);
+        eplPlatformDataUnref(pdpy->platform);
         pdpy->platform = NULL;
         pthread_mutex_unlock(&pdpy->mutex);
 
@@ -213,7 +214,7 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
         // TODO: Should we just unconditionally free the display here? If
         // another thread is in the middle of a function call, then it's going
         // to crash anyway.
-        if (shouldDestroy)
+        if (eplRefCountUnref(&pdpy->refcount))
         {
             DestroyDisplay(pdpy);
         }
@@ -230,7 +231,7 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
     }
 
     eplImplCleanupPlatform(platform);
-    free(platform);
+    eplPlatformDataUnref(platform);
     return EGL_FALSE;
 }
 
@@ -577,7 +578,7 @@ static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
         goto done;
     }
 
-    pdpy->platform = plat;
+    pdpy->platform = eplPlatformDataRef(plat);
     pdpy->platform_enum = platform;
     pdpy->external_display = (EGLDisplay) pdpy;
     pdpy->track_references = track_references;
@@ -588,6 +589,7 @@ static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
     if (!eplImplGetPlatformDisplay(plat, pdpy, nativeDisplay, remainingAttribs, &display_list))
     {
         pthread_mutex_destroy(&pdpy->mutex);
+        eplPlatformDataUnref(pdpy->platform);
         free(pdpy);
         ret = EGL_NO_DISPLAY;
         goto done;
