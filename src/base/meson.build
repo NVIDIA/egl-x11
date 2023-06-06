@@ -18,6 +18,7 @@ platform_base = static_library('platform-base',
     'config-list.c',
     'platform-base.c',
     'platform-utils.c',
+    'refcountobj.c',
   ],
   dependencies: [
     dep_libdrm.partial_dependency(compile_args : true, includes : true),
