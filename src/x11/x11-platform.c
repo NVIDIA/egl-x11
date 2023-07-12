@@ -626,6 +626,48 @@ static EGLBoolean CheckServerExtensions(xcb_connection_t *conn)
     return EGL_TRUE;
 }
 
+static EGLBoolean CheckServerFormatSupport(X11DisplayInstance *inst)
+{
+    const X11DriverFormat *fmt = NULL;
+    xcb_dri3_get_supported_modifiers_cookie_t cookie;
+    xcb_dri3_get_supported_modifiers_reply_t *reply = NULL;
+    xcb_generic_error_t *error = NULL;
+    int numScreenMods;
+    const uint64_t *screenMods = NULL;
+    int i, j;
+    EGLBoolean found = EGL_FALSE;
+
+    // Use XRGB8 to check for server support. With our driver, every format
+    // should have the same set of modifiers, so we just need to pick something
+    // that we'll always support.
+    fmt = eplX11FindDriverFormat(inst, DRM_FORMAT_XRGB8888);
+
+    cookie = xcb_dri3_get_supported_modifiers(inst->conn, inst->xscreen->root,
+            eplFormatInfoDepth(fmt->fmt), fmt->fmt->bpp);
+    reply = xcb_dri3_get_supported_modifiers_reply(inst->conn, cookie, &error);
+    if (reply == NULL)
+    {
+        free(error);
+        return EGL_FALSE;
+    }
+
+    numScreenMods = xcb_dri3_get_supported_modifiers_screen_modifiers_length(reply);
+    screenMods = xcb_dri3_get_supported_modifiers_screen_modifiers(reply);
+    for (i=0; i<numScreenMods && !found; i++)
+    {
+        for (j=0; j<fmt->num_modifiers && !found; j++)
+        {
+            if (screenMods[i] == fmt->modifiers[j])
+            {
+                found = EGL_TRUE;
+            }
+        }
+    }
+
+    free(reply);
+    return found;
+}
+
 X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean from_init)
 {
     X11DisplayInstance *inst = NULL;
@@ -772,6 +814,16 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
         // This should never happen. If it does, then we've got a problem in
         // the driver.
         eplSetError(pdpy->platform, EGL_BAD_ALLOC, "No supported image formats from driver");
+        eplX11DisplayInstanceUnref(inst);
+        return NULL;
+    }
+
+    if (!CheckServerFormatSupport(inst))
+    {
+        if (from_init)
+        {
+            eplSetError(pdpy->platform, EGL_BAD_ALLOC, "No supported image formats from server");
+        }
         eplX11DisplayInstanceUnref(inst);
         return NULL;
     }
