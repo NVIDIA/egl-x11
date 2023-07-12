@@ -24,4 +24,5 @@ dep_eglexternal = dependency('eglexternalplatform', version : ['>=1.2', '<2'])
 inc_base = include_directories('src/base')
 
 subdir('src/base')
+subdir('src/x11')
 

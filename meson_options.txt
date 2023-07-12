@@ -1,0 +1,10 @@
+option(
+  'xlib',
+  type : 'feature',
+  description : 'Build a platform library for EGL_PLATFORM_X11'
+)
+option(
+  'xcb',
+  type : 'boolean',
+  description : 'Build a platform library for EGL_PLATFORM_XCB'
+)
