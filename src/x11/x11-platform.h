@@ -404,4 +404,6 @@ EGLBoolean eplX11HookChooseConfig(EGLDisplay edpy, EGLint const *attribs,
 EGLBoolean eplX11HookGetConfigAttrib(EGLDisplay edpy, EGLConfig config,
         EGLint attribute, EGLint *value);
 
+void eplX11DestroyPixmap(EplSurface *surf);
+
 #endif // X11_PLATFORM_H

@@ -1195,7 +1195,14 @@ static void eplX11TerminateDisplay(EplPlatformData *plat, EplDisplay *pdpy)
 
 static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf)
 {
-    // Nothing to do yet.
+    if (surf->type == EPL_SURFACE_TYPE_PIXMAP)
+    {
+        eplX11DestroyPixmap(surf);
+    }
+    else
+    {
+        assert(!"Invalid surface type.");
+    }
 }
 
 static void eplX11FreeSurface(EplDisplay *pdpy, EplSurface *surf)
