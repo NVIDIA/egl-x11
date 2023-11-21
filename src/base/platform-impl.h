@@ -97,6 +97,10 @@ typedef struct _EplImplFuncs
      * If the implementation doesn't recognize an attribute, it may either
      * ignore the attribute or return EGL_FALSE.
      *
+     * This function is optional. If it's NULL, then the platform does not
+     * accept any platform-specific attributes, and so only the base library
+     * checks described above apply.
+     *
      * \param plat The EplPlatformData struct.
      * \param pdpy An existing EplDisplay struct to check.
      * \param platform The platform enum.

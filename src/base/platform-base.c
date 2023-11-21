@@ -80,7 +80,6 @@ EplPlatformData *eplPlatformBaseAllocate(int major, int minor,
 
     // Assert that all of the required implementation functions are provided.
     assert(impl->QueryString != NULL);
-    assert(impl->IsSameDisplay != NULL);
     assert(impl->GetPlatformDisplay != NULL);
     assert(impl->CleanupDisplay != NULL);
     assert(impl->InitializeDisplay != NULL);
@@ -565,6 +564,16 @@ static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
         }
         else
         {
+            if (plat->impl->IsSameDisplay == NULL)
+            {
+                /*
+                 * If we don't have an IsSameDisplay function, then the
+                 * platform doesn't support any additional attributes.
+                 */
+                eplSetError(plat, EGL_BAD_ATTRIBUTE, "Unsupported attribute 0x%04llx",
+                        (unsigned long long) attribs[i]);
+                return EGL_NO_DISPLAY;
+            }
             remainingAttribs[attribIndex++] = attribs[i];
             remainingAttribs[attribIndex++] = attribs[i + 1];
         }
@@ -583,13 +592,19 @@ static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
             continue;
         }
 
-        // TODO: Make IsSameDisplay optional, and have the default behavior
-        // just be to compare the attribute list?
-        if (plat->impl->IsSameDisplay(plat, node, platform, nativeDisplay, remainingAttribs))
+        if (plat->impl->IsSameDisplay != NULL)
         {
-            pdpy = node;
-            break;
+            if (!plat->impl->IsSameDisplay(plat, node, platform, nativeDisplay, remainingAttribs))
+            {
+                continue;
+            }
         }
+
+        // At this point, either IsSameDisplay returned true, or we don't have
+        // any additional attributes beyond what the platform base code handles.
+
+        pdpy = node;
+        break;
     }
 
     if (pdpy != NULL)
