@@ -36,6 +36,8 @@
 #include "glvnd_list.h"
 #include "refcountobj.h"
 
+#define PUBLIC __attribute__((visibility("default")))
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -249,11 +251,50 @@ typedef struct _EplPlatformData
     struct glvnd_list internal_display_list;
     pthread_mutex_t internal_display_list_mutex;
 
+    EGLenum platform_enum;
+    const struct _EplImplFuncs *impl;
+
     struct glvnd_list entry;
 } EplPlatformData;
 
 EPL_REFCOUNT_DECLARE_TYPE_FUNCS(EplPlatformData, eplPlatformData);
 EPL_REFCOUNT_DECLARE_TYPE_FUNCS(EplInternalDisplay, eplInternalDisplay);
+
+/**
+ * Allocates and initializes an EplPlatformData struct.
+ *
+ * This is called from the loadEGLExternalPlatform entrypoint.
+ *
+ * After calling eplPlatformBaseAllocate, the caller should perform any
+ * platform-specific initialization, and then call eplPlatformBaseInitFinish
+ * (on success) or eplPlatformBaseInitFail (on failure).
+ *
+ * \param platform_enum The EGL enum value for this platform.
+ * \param impl The platform implementation functions.
+ * \param platform_priv_size If non-zero, then allocate additional space and
+ *      assign it to EplPlatformData::priv.
+ * \return A EplPlatformData struct, or NULL on error.
+ */
+EplPlatformData *eplPlatformBaseAllocate(int major, int minor,
+        const EGLExtDriver *driver, EGLExtPlatform *extplatform,
+        EGLenum platform_enum, const struct _EplImplFuncs *impl,
+        size_t platform_priv_size);
+
+/**
+ * Finishes initializing a platform.
+ *
+ * This function should be called from loadEGLExternalPlatform after any
+ * platform-specific initialization.
+ */
+void eplPlatformBaseInitFinish(EplPlatformData *plat);
+
+/**
+ * Cleans up a EplPlatformData after an init failure.
+ *
+ * This function should be called from loadEGLExternalPlatform if the
+ * platform-specicic initialization fails.
+ */
+void eplPlatformBaseInitFail(EplPlatformData *plat);
 
 /**
  * Looks up an EglDisplay struct.

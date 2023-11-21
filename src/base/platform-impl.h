@@ -31,135 +31,222 @@
 
 #include "platform-base.h"
 
-/**
- * The platform enum for eglGetPlatformDisplay (e.g., EGL_PLATFORM_X11_KHR).
- */
-extern const EGLint EPLIMPL_PLATFORM_ENUM_VALUE;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
- * Does whatever initialization is needed when the library is loaded.
- *
- * This is called from the loadEGLExternalPlatform entrypoint. The base
- * EplPlatformData struct will already be filled in.
+ * A table of functions for the platform-specific implementation.
  */
-EGLBoolean eplImplInitPlatform(EplPlatformData *plat, int major, int minor,
-        const EGLExtDriver *driver, EGLExtPlatform *extplatform);
+typedef struct _EplImplFuncs
+{
+    /**
+     * Cleans up the platform data.
+     */
+    void (* CleanupPlatform) (EplPlatformData *plat);
 
-/**
- * Cleans up the platform data.
- */
-void eplImplCleanupPlatform(EplPlatformData *plat);
+    /**
+     * Handles the EGLExtPlatformExports::QueryString export.
+     *
+     * Note that \p pdpy will not be NULL. If the driver passes in an unknown
+     * EGLDisplay, then the base library will simply return without calling
+     * this function. That means that currently, there's no way to add an
+     * extension to an EGLDisplay that the platform library doesn't own.
+     *
+     * \param pdpy The EplDisplay struct.
+     */
+    const char * (* QueryString) (EplPlatformData *plat, EplDisplay *pdpy, EGLExtPlatformString name);
 
-/**
- * Handles the QueryString export.
- *
- * \param pdpy will either be a valid EplDisplay, or NULL if the caller passed
- *      in EGL_NO_DISPLAY.
- */
-const char *eplImplQueryString(EplPlatformData *plat, EplDisplay *pdpy, EGLExtPlatformString name);
+    /**
+     * Checks if a pointer looks like a valid native display for a platform.
+     *
+     * This function is optional. If it's NULL, then it's equivalent to simply
+     * returning EGL_FALSE.
+     *
+     * \param plat The EplPlatformData struct.
+     * \param plat The native display pointer.
+     * \return EGL_TRUE if \p nativeDisplay looks like a valid native display.
+     */
+    EGLBoolean (* IsValidNativeDisplay) (EplPlatformData *plat, void *nativeDisplay);
 
-EGLBoolean eplImplIsValidNativeDisplay(EplPlatformData *plat, void *nativeDisplay);
+    /**
+     * Returns the hook function for an EGL function.
+     *
+     * This function is optional. If it's NULL, then there are no
+     * platform-specific hook functions.
+     *
+     * \param plat The EplPlatformData struct.
+     * \param name The EGL function name.
+     * \return A function pointer, or NULL if there isn't aa hook for that
+     * function.
+     */
+    void * (* GetHookFunction) (EplPlatformData *plat, const char *name);
 
-/**
- * Returns the hook function for an EGL function.
- */
-void *eplImplGetHookFunction(EplPlatformData *plat, const char *name);
+    /**
+     * Checks if an eglGetPlatformDisplay call matches an existing EGLDisplay.
+     *
+     * Two eglGetPlatformDisplay calls with the same parameters are supposed to
+     * return the same EGLDisplay. The base library checks the platform enum,
+     * the native display pointer, and any attributes that the base library
+     * itself handles.
+     *
+     * If there are additional platform-specific attributes, then this function
+     * checks whether those attributes match an existing display, possibly
+     * taking into account any default attribute values.
+     *
+     * If the implementation doesn't recognize an attribute, it may either
+     * ignore the attribute or return EGL_FALSE.
+     *
+     * \param plat The EplPlatformData struct.
+     * \param pdpy An existing EplDisplay struct to check.
+     * \param platform The platform enum.
+     * \param native_display The native display pointer.
+     * \param attribs The remaining attributes. This array does not include
+     *      the attributes that the base library handles.
+     * \return EGL_TRUE if the attributes match \p pdpy, and so
+     *      eglGetPlatformDisplay should return the EGLDisplay handle for it.
+     */
+    EGLBoolean (* IsSameDisplay) (EplPlatformData *plat, EplDisplay *pdpy, EGLint platform,
+            void *native_display, const EGLAttrib *attribs);
 
-/**
- * Returns true if two sets of display attributes should be considered
- * the same, taking into account any default values.
- *
- * If the implementation doesn't recognize an attribute, it may either
- * ignore the attribute or return false.
- */
-EGLBoolean eplImplIsSameDisplay(EplPlatformData *plat, EplDisplay *pdpy, EGLint platform,
-        void *native_display, const EGLAttrib *attribs);
+    /**
+     * Called to implement eglGetPlatformDisplay.
+     *
+     * \param plat The EplPlatformData struct.
+     * \param pdpy The base EplDisplay struct. This will be filled in already,
+     *      except for the \c internal_display member.
+     * \param platform The platform enum.
+     * \param native_display The native display pointer.
+     * \param attribs The remaining attributes. This array does not include
+     *      the attributes that the base library handles.
+     *
+     * \return EGL_TRUE on success, or EGL_FALSE on failure.
+     */
+    EGLBoolean (* GetPlatformDisplay) (EplPlatformData *plat, EplDisplay *pdpy,
+            void *native_display, const EGLAttrib *attribs,
+            struct glvnd_list *existing_displays);
 
-/**
- * Called to implement eglGetPlatformDisplay.
- *
- * The base EplDisplay struct will be filled in already, except for the
- * \c internal_display member.
- *
- * \return EGL_TRUE on success, or EGL_FALSE on failure.
- */
-EGLBoolean eplImplGetPlatformDisplay(EplPlatformData *plat, EplDisplay *pdpy,
-        void *native_display, const EGLAttrib *attribs,
-        struct glvnd_list *existing_displays);
+    /**
+     * Cleans up any implementation data in an EplDisplay.
+     *
+     * Currently, this is only called during teardown, but if/when
+     * EGL_EXT_display_alloc is available, then this would be called to handle
+     * destroying an EGLDisplay.
+     *
+     * If this is called during teardown, then the \c EplDisplay::platform pointer
+     * may be NULL.
+     *
+     * Note that if a EGLDisplay is still initialized during teardown, then the
+     * base library will call \c TerminateDisplay before \c CleanupDisplay.
+     *
+     * \param pdpy The EplDisplay struct to destroy.
+     */
+    void (* CleanupDisplay) (EplDisplay *pdpy);
 
-/**
- * Cleans up any implementation data in an EplDisplay.
- *
- * If this is called during teardown, then the \c EplDisplay::platform pointer
- * may be NULL.
- */
-void eplImplCleanupDisplay(EplDisplay *pdpy);
+    /**
+     * Called to implement eglInitialize.
+     *
+     * Note that the base library handles EGL_KHR_display_reference, so this
+     * function is only ever called on an uninitialized display.
+     *
+     * \param plat The EplPlatformData struct.
+     * \param pdpy The EplDisplay to initialize.
+     * \param[out] major Returns the major version number.
+     * \param[out] minor Returns the minor version number.
+     * \return EGL_TRUE on success, EGL_FALSE on failure.
+     */
+    EGLBoolean (* InitializeDisplay) (EplPlatformData *plat, EplDisplay *pdpy, EGLint *major, EGLint *minor);
 
-/**
- * Called to implement eglInitialize.
- */
-EGLBoolean eplImplInitializeDisplay(EplPlatformData *plat, EplDisplay *pdpy, EGLint *major, EGLint *minor);
-void eplImplTerminateDisplay(EplPlatformData *plat, EplDisplay *pdpy);
+    /**
+     * Called to implement eglTerminate.
+     *
+     * Note that the base library handles EGL_KHR_display_reference, so this
+     * function is only ever called on an initialized display.
+     */
+    void (* TerminateDisplay) (EplPlatformData *plat, EplDisplay *pdpy);
 
-/**
- * Creates an EGLSurface for a window.
- *
- * \param plat The EplPlatformData struct
- * \param pdpy The EplDisplay struct
- * \param psurf An EplSurface struct, with the base information filled in.
- * \param native_surface The native surface handle.
- * \param attribs The attribute list.
- * \param create_platform If this is true, then the call is from
- *      eglCreatePlatformWindowSurface. If false, it's from
- *      eglCreateWindowSurface.
- * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
- */
-EGLSurface eplImplCreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
-        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+    /**
+     * Creates an EGLSurface for a window.
+     *
+     * This function is optional. If it's NULL, then the platform does not
+     * support window surfaces.
+     *
+     * \param plat The EplPlatformData struct
+     * \param pdpy The EplDisplay struct
+     * \param psurf An EplSurface struct, with the base information filled in.
+     * \param native_surface The native surface handle.
+     * \param attribs The attribute list.
+     * \param create_platform If this is true, then the call is from
+     *      eglCreatePlatformWindowSurface. If false, it's from
+     *      eglCreateWindowSurface.
+     * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
+     */
+    EGLSurface (* CreateWindowSurface) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
+            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
 
-/**
- * Creates an EGLSurface for a pixmap.
- *
- * \param plat The EplPlatformData struct
- * \param pdpy The EplDisplay struct
- * \param psurf An EplSurface struct, with the base information filled in.
- * \param native_surface The native surface handle.
- * \param attribs The attribute list.
- * \param create_platform If this is true, then the call is from
- *      eglCreatePlatformPixmapSurface. If false, it's from
- *      eglCreatePixmapSurface.
- * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
- */
-EGLSurface eplImplCreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
-        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+    /**
+     * Creates an EGLSurface for a pixmap.
+     *
+     * This function is optional. If it's NULL, then the platform does not
+     * support pixmap surfaces.
+     *
+     * \param plat The EplPlatformData struct
+     * \param pdpy The EplDisplay struct
+     * \param psurf An EplSurface struct, with the base information filled in.
+     * \param native_surface The native surface handle.
+     * \param attribs The attribute list.
+     * \param create_platform If this is true, then the call is from
+     *      eglCreatePlatformPixmapSurface. If false, it's from
+     *      eglCreatePixmapSurface.
+     * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
+     */
+    EGLSurface (* CreatePixmapSurface) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
+            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
 
-/**
- * Called to handle eglDestroySurface and eglTerminate.
- *
- * Note that it's possible that the EplSurface struct itself might stick around
- * if another thread is holding a reference to it.
- *
- * This is also called if the platform library gets unloaded. In that case,
- * EplDisplay::platform will be NULL.
- */
-void eplImplDestroySurface(EplDisplay *pdpy, EplSurface *psurf);
+    /**
+     * Called to handle eglDestroySurface and eglTerminate.
+     *
+     * Note that it's possible that the EplSurface struct itself might stick around
+     * if another thread is holding a reference to it.
+     *
+     * \c FreeSurface is called when the refcount actually drops to zero.
+     *
+     * \param plat The EplPlatformData struct
+     * \param pdpy The EplDisplay struct
+     */
+    void (* DestroySurface) (EplDisplay *pdpy, EplSurface *psurf);
 
-/**
- * Called when an EplSurface is about to be freed.
- *
- * At this point, it's safe to assume that no other thread is going to touch
- * the surface, so the platform must free anything that it hasn't already freed
- * in eplImplDestroySurface.
- */
-void eplImplFreeSurface(EplDisplay *pdpy, EplSurface *psurf);
+    /**
+     * Called when an EplSurface is about to be freed.
+     *
+     * At this point, it's safe to assume that no other thread is going to touch
+     * the surface, so the platform must free anything that it hasn't already freed
+     * in \c DestroySurface.
+     *
+     * \param plat The EplPlatformData struct
+     * \param pdpy The EplDisplay struct
+     */
+    void (* FreeSurface) (EplDisplay *pdpy, EplSurface *psurf);
 
-/**
- * Implements eglSwapBuffers and eglSwapBuffersWithDamageEXT.
- *
- * If the application calls eglSwapBuffers, then \p rects will be NULL and
- * \p n_rects will be zero.
- */
-EGLBoolean eplImplSwapBuffers(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
-        const EGLint *rects, EGLint n_rects);
+    /**
+     * Implements eglSwapBuffers and eglSwapBuffersWithDamageEXT.
+     *
+     * If the application calls eglSwapBuffers, then \p rects will be NULL and
+     * \p n_rects will be zero.
+     *
+     * \param plat The EplPlatformData struct
+     * \param pdpy The EplDisplay struct
+     * \param psurf The EplSurface struct. This will always be the thread's
+     *      current drawing surface.
+     * \param rects The damage rectangles, or NULL.
+     * \param n_rects The number of damage rectangles.
+     * \return EGL_TRUE on success, EGL_FALSE on failure.
+     */
+    EGLBoolean (* SwapBuffers) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
+            const EGLint *rects, EGLint n_rects);
+} EplImplFuncs;
 
+#ifdef __cplusplus
+}
+#endif
 #endif // PLATFORM_IMPL_H

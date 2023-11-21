@@ -26,8 +26,6 @@
 #include "platform-utils.h"
 #include "platform-impl.h"
 
-#define PUBLIC __attribute__((visibility("default")))
-
 #define USE_ERRORCHECK_MUTEX 1
 
 static void *eplGetHookAddressExport(void *platformData, const char *name);
@@ -72,24 +70,47 @@ static __attribute__((destructor)) void LibraryFini(void)
 EPL_REFCOUNT_DEFINE_TYPE_FUNCS(EplPlatformData, eplPlatformData, refcount, free);
 EPL_REFCOUNT_DEFINE_TYPE_FUNCS(EplInternalDisplay, eplInternalDisplay, refcount, free);
 
-PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
-                                   const EGLExtDriver *driver,
-                                   EGLExtPlatform *extplatform)
+EplPlatformData *eplPlatformBaseAllocate(int major, int minor,
+        const EGLExtDriver *driver, EGLExtPlatform *extplatform,
+        EGLenum platform_enum, const EplImplFuncs *impl,
+        size_t platform_priv_size)
 {
     EplPlatformData *platform = NULL;
     const char *str;
 
-    if (extplatform == NULL || !EGL_EXTERNAL_PLATFORM_VERSION_CHECK(major, minor))
+    // Assert that all of the required implementation functions are provided.
+    assert(impl->QueryString != NULL);
+    assert(impl->IsSameDisplay != NULL);
+    assert(impl->GetPlatformDisplay != NULL);
+    assert(impl->CleanupDisplay != NULL);
+    assert(impl->InitializeDisplay != NULL);
+    assert(impl->TerminateDisplay != NULL);
+    assert(impl->DestroySurface != NULL);
+    assert(impl->FreeSurface != NULL);
+
+    // SwapBuffers is only required if the platform supports windows.
+    assert(impl->CreateWindowSurface == NULL || impl->SwapBuffers != NULL);
+
+    // HACK: EGL_EXTERNAL_PLATFORM_VERSION_CHECK is backwards and doesn't work.
+    if (extplatform == NULL || !EGL_EXTERNAL_PLATFORM_VERSION_CMP(major, minor,
+                EGL_EXTERNAL_PLATFORM_VERSION_MAJOR, EGL_EXTERNAL_PLATFORM_VERSION_MINOR))
     {
-        return EGL_FALSE;
+        return NULL;
     }
 
-    platform = calloc(1, sizeof(EplPlatformData));
+    platform = calloc(1, sizeof(EplPlatformData) + platform_priv_size);
     if (platform == NULL)
     {
-        return EGL_FALSE;
+        return NULL;
     }
     eplRefCountInit(&platform->refcount);
+
+    platform->impl = impl;
+    platform->platform_enum = platform_enum;
+    if (platform_priv_size > 0)
+    {
+        platform->priv = (EplImplPlatform *) (platform + 1);
+    }
 
     glvnd_list_init(&platform->entry);
     glvnd_list_init(&platform->internal_display_list);
@@ -144,7 +165,7 @@ PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
             || platform->egl.QueryDisplayAttribEXT == NULL)
     {
         eplPlatformDataUnref(platform);
-        return EGL_FALSE;
+        return NULL;
     }
 
     // Check for any extensions that we care about.
@@ -154,7 +175,7 @@ PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
     extplatform->version.major = EGL_EXTERNAL_PLATFORM_VERSION_MAJOR;
     extplatform->version.minor = EGL_EXTERNAL_PLATFORM_VERSION_MINOR;
     extplatform->version.micro = 0;
-    extplatform->platform = EPLIMPL_PLATFORM_ENUM_VALUE;
+    extplatform->platform = platform_enum;
 
     extplatform->exports.unloadEGLExternalPlatform = eplUnloadExternalPlatformExport;
     extplatform->exports.getHookAddress = eplGetHookAddressExport;
@@ -165,17 +186,20 @@ PUBLIC EGLBoolean loadEGLExternalPlatform(int major, int minor,
     //extplatform->exports.getObjectLabel = eplGetObjectLabelExport;
     extplatform->data = platform;
 
-    if (!eplImplInitPlatform(platform, major, minor, driver, extplatform))
-    {
-        eplPlatformDataUnref(platform);
-        return EGL_FALSE;
-    }
+    return platform;
+}
 
+void eplPlatformBaseInitFinish(EplPlatformData *plat)
+{
     pthread_mutex_lock(&platform_data_list_mutex);
-    glvnd_list_add(&platform->entry, &platform_data_list);
+    glvnd_list_add(&plat->entry, &platform_data_list);
     pthread_mutex_unlock(&platform_data_list_mutex);
+}
 
-    return EGL_TRUE;
+void eplPlatformBaseInitFail(EplPlatformData *plat)
+{
+    assert(glvnd_list_is_empty(&plat->entry));
+    eplPlatformDataUnref(plat);
 }
 
 static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
@@ -232,7 +256,10 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
         eplInternalDisplayUnref(idpy);
     }
 
-    eplImplCleanupPlatform(platform);
+    if (platform->impl->CleanupPlatform != NULL)
+    {
+        platform->impl->CleanupPlatform(platform);
+    }
     eplPlatformDataUnref(platform);
     return EGL_FALSE;
 }
@@ -318,7 +345,7 @@ static void DestroyDisplay(EplDisplay *pdpy)
 
     DestroyAllSurfaces(pdpy);
 
-    eplImplCleanupDisplay(pdpy);
+    pdpy->platform->impl->CleanupDisplay(pdpy);
     pthread_mutex_destroy(&pdpy->mutex);
     free(pdpy);
 }
@@ -495,7 +522,7 @@ void eplSurfaceRelease(EplDisplay *pdpy, EplSurface *psurf)
             // eglTerminate has already run, so the platform-specific code has
             // already cleaned up the surface.
             assert(psurf->deleted);
-            eplImplFreeSurface(pdpy, psurf);
+            pdpy->platform->impl->FreeSurface(pdpy, psurf);
             FreeBaseSurface(psurf);
         }
     }
@@ -515,7 +542,7 @@ static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
 
     EGLBoolean track_references = EGL_FALSE;
 
-    if (platform != EPLIMPL_PLATFORM_ENUM_VALUE)
+    if (platform != plat->platform_enum)
     {
         return EGL_NO_DISPLAY;
     }
@@ -556,7 +583,9 @@ static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
             continue;
         }
 
-        if (eplImplIsSameDisplay(plat, node, platform, nativeDisplay, remainingAttribs))
+        // TODO: Make IsSameDisplay optional, and have the default behavior
+        // just be to compare the attribute list?
+        if (plat->impl->IsSameDisplay(plat, node, platform, nativeDisplay, remainingAttribs))
         {
             pdpy = node;
             break;
@@ -592,7 +621,7 @@ static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
     glvnd_list_init(&pdpy->surface_list);
     glvnd_list_init(&pdpy->entry);
 
-    if (!eplImplGetPlatformDisplay(plat, pdpy, nativeDisplay, remainingAttribs, &display_list))
+    if (!plat->impl->GetPlatformDisplay(plat, pdpy, nativeDisplay, remainingAttribs, &display_list))
     {
         pthread_mutex_destroy(&pdpy->mutex);
         eplPlatformDataUnref(pdpy->platform);
@@ -623,7 +652,7 @@ static EGLBoolean HookInitialize(EGLDisplay edpy, EGLint *major, EGLint *minor)
     {
         pdpy->major = 1;
         pdpy->minor = 5;
-        if (!eplImplInitializeDisplay(pdpy->platform, pdpy, &pdpy->major, &pdpy->minor))
+        if (!pdpy->platform->impl->InitializeDisplay(pdpy->platform, pdpy, &pdpy->major, &pdpy->minor))
         {
             eplDisplayRelease(pdpy);
             return EGL_FALSE;
@@ -669,7 +698,7 @@ static void TerminateDisplay(EplDisplay *pdpy)
     }
 
     DestroyAllSurfaces(pdpy);
-    eplImplTerminateDisplay(pdpy->platform, pdpy);
+    pdpy->platform->impl->TerminateDisplay(pdpy->platform, pdpy);
 }
 
 static void CheckTerminateDisplay(EplDisplay *pdpy)
@@ -766,13 +795,27 @@ static EGLSurface CommonCreateSurface(EplDisplay *pdpy,
 
     if (type == EPL_SURFACE_TYPE_WINDOW)
     {
-        psurf->internal_surface = eplImplCreateWindowSurface(pdpy->platform, pdpy, psurf,
-            config, native_handle, attrib_list, create_platform);
+        if (pdpy->platform->impl->CreateWindowSurface != NULL)
+        {
+            psurf->internal_surface = pdpy->platform->impl->CreateWindowSurface(pdpy->platform,
+                    pdpy, psurf, config, native_handle, attrib_list, create_platform);
+        }
+        else
+        {
+            eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Window surfaces are not supported");
+        }
     }
     else if (type == EPL_SURFACE_TYPE_PIXMAP)
     {
-        psurf->internal_surface = eplImplCreatePixmapSurface(pdpy->platform, pdpy, psurf,
-            config, native_handle, attrib_list, create_platform);
+        if (pdpy->platform->impl->CreatePixmapSurface != NULL)
+        {
+            psurf->internal_surface = pdpy->platform->impl->CreatePixmapSurface(pdpy->platform,
+                    pdpy, psurf, config, native_handle, attrib_list, create_platform);
+        }
+        else
+        {
+            eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Pixmap surfaces are not supported");
+        }
     }
     else
     {
@@ -903,7 +946,7 @@ static void DeleteSurfaceCommon(EplDisplay *pdpy, EplSurface *psurf)
     {
         psurf->deleted = EGL_TRUE;
         glvnd_list_del(&psurf->entry);
-        eplImplDestroySurface(pdpy, psurf);
+        pdpy->platform->impl->DestroySurface(pdpy, psurf);
 
         eplRefCountUnref(&psurf->refcount);
     }
@@ -961,14 +1004,19 @@ static EGLBoolean HookSwapBuffersWithDamageEXT(EGLDisplay edpy, EGLSurface esurf
     psurf = eplSurfaceAcquire(pdpy, esurf);
     if (psurf != NULL)
     {
-        if (pdpy->platform->egl.GetCurrentSurface(EGL_DRAW) == esurf)
+        if (psurf->type != EPL_SURFACE_TYPE_WINDOW)
         {
-            ret = eplImplSwapBuffers(pdpy->platform, pdpy, psurf, rects, n_rects);
+            eplSetError(pdpy->platform, EGL_BAD_SURFACE, "EGLSurface %p is not a window", esurf);
+            ret = EGL_FALSE;
         }
-        else
+        else if (pdpy->platform->egl.GetCurrentSurface(EGL_DRAW) != esurf)
         {
             eplSetError(pdpy->platform, EGL_BAD_SURFACE, "EGLSurface %p is not current", esurf);
             ret = EGL_FALSE;
+        }
+        else
+        {
+            ret = pdpy->platform->impl->SwapBuffers(pdpy->platform, pdpy, psurf, rects, n_rects);
         }
 
         eplSurfaceRelease(pdpy, psurf);
@@ -1027,14 +1075,25 @@ void *eplGetHookAddressExport(void *platformData, const char *name)
 
     if (func == NULL)
     {
-        func = eplImplGetHookFunction(plat, name);
+        if (plat->impl->GetHookFunction != NULL)
+        {
+            func = plat->impl->GetHookFunction(plat, name);
+        }
     }
     return func;
 }
 
 static EGLBoolean eplIsValidNativeDisplayExport(void *platformData, void *nativeDisplay)
 {
-    return eplImplIsValidNativeDisplay(platformData, nativeDisplay);
+    EplPlatformData *plat = platformData;
+    if (plat->impl->IsValidNativeDisplay != NULL)
+    {
+        return plat->impl->IsValidNativeDisplay(platformData, nativeDisplay);
+    }
+    else
+    {
+        return EGL_FALSE;
+    }
 }
 
 static const char *eplQueryStringExport(void *platformData, EGLDisplay edpy, EGLExtPlatformString name)
@@ -1052,7 +1111,7 @@ static const char *eplQueryStringExport(void *platformData, EGLDisplay edpy, EGL
         }
     }
 
-    str = eplImplQueryString(plat, pdpy, name);
+    str = plat->impl->QueryString(plat, pdpy, name);
     if (pdpy != NULL)
     {
         eplDisplayRelease(pdpy);
