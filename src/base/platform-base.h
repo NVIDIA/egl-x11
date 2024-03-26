@@ -207,6 +207,9 @@ typedef struct _EplPlatformData
         PFNEGLGETCURRENTSURFACEPROC GetCurrentSurface;
         PFNEGLGETCURRENTCONTEXTPROC GetCurrentContext;
         PFNEGLMAKECURRENTPROC MakeCurrent;
+        PFNEGLWAITGLPROC WaitGL;
+        PFNEGLWAITCLIENTPROC WaitClient;
+        PFNEGLWAITNATIVEPROC WaitNative;
 
         PFNEGLQUERYDEVICEATTRIBEXTPROC QueryDeviceAttribEXT;
         PFNEGLQUERYDEVICESTRINGEXTPROC QueryDeviceStringEXT;
@@ -297,7 +300,7 @@ void eplPlatformBaseInitFinish(EplPlatformData *plat);
 void eplPlatformBaseInitFail(EplPlatformData *plat);
 
 /**
- * Looks up an EglDisplay struct.
+ * Looks up an EplDisplay struct.
  *
  * This will look up the display, lock it, and check to make sure that it's
  * initialized.
@@ -305,6 +308,11 @@ void eplPlatformBaseInitFail(EplPlatformData *plat);
  * The caller must call eplDisplayRelease to unlock and release the display.
  */
 EplDisplay *eplDisplayAcquire(EGLDisplay edpy);
+
+/**
+ * Returns the current EGLDisplay for the current thread.
+ */
+EGLDisplay eplGetCurrentDisplay(void);
 
 /**
  * Releases a display acquired with eplDisplayAcquire.

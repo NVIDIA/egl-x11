@@ -248,6 +248,34 @@ typedef struct _EplImplFuncs
      */
     EGLBoolean (* SwapBuffers) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
             const EGLint *rects, EGLint n_rects);
+
+    /**
+     * Implements eglWaitGL and eglWaitClient.
+     *
+     * This function is optional. If it's NULL, then the base library will
+     * not provide a hook function eglWaitGL or eglWaitClient, and so the
+     * driver will follow its default behavior.
+     *
+     * \param pdpy The EplDisplay struct
+     * \param psurf The current EplSurface, or NULL if there isn't a current
+     *      surface.
+     * \return EGL_TRUE on success, EGL_FALSE on failure.
+     */
+    EGLBoolean (*WaitGL) (EplDisplay *pdpy, EplSurface *psurf);
+
+    /**
+     * Implements eglWaitNative.
+     *
+     * This function is optional. If it's NULL, then the base library will not
+     * provide a hook function eglWaitNative, and so the driver will follow its
+     * default behavior.
+     *
+     * \param pdpy The EplDisplay struct
+     * \param psurf The current EplSurface, or NULL if there isn't a current
+     *      surface.
+     * \return EGL_TRUE on success, EGL_FALSE on failure.
+     */
+    EGLBoolean (*WaitNative) (EplDisplay *pdpy, EplSurface *psurf);
 } EplImplFuncs;
 
 #ifdef __cplusplus

@@ -130,6 +130,9 @@ EplPlatformData *eplPlatformBaseAllocate(int major, int minor,
     platform->egl.GetCurrentSurface = driver->getProcAddress("eglGetCurrentSurface");
     platform->egl.GetCurrentContext = driver->getProcAddress("eglGetCurrentContext");
     platform->egl.MakeCurrent = driver->getProcAddress("eglMakeCurrent");
+    platform->egl.WaitGL = driver->getProcAddress("eglWaitGL");
+    platform->egl.WaitNative = driver->getProcAddress("eglWaitNative");
+    platform->egl.WaitClient = driver->getProcAddress("eglWaitClient");
     platform->egl.ChooseConfig = driver->getProcAddress("eglChooseConfig");
     platform->egl.GetConfigAttrib = driver->getProcAddress("eglGetConfigAttrib");
     platform->egl.GetConfigs = driver->getProcAddress("eglGetConfigs");
@@ -317,6 +320,34 @@ EplDisplay *eplDisplayAcquire(EGLDisplay edpy)
     }
 
     return pdpy;
+}
+
+EGLDisplay eplGetCurrentDisplay(void)
+{
+    EplPlatformData *plat;
+    EGLDisplay edpy = EGL_NO_DISPLAY;
+
+    /*
+     * In practice, loadEGLExternalPlatform is only ever going to get called
+     * once (and if it was more than once, it would still be from the same
+     * driver), so we'll only have one eglGetCurrentDisplay implementation.
+     *
+     * But, if there ever is the chance of getting loaded by more than one
+     * driver, only one of them could have a current context, so the following
+     * code would still work.
+     */
+    pthread_mutex_lock(&platform_data_list_mutex);
+    glvnd_list_for_each_entry(plat, &platform_data_list, entry)
+    {
+        edpy = plat->egl.GetCurrentDisplay();
+        if (edpy != EGL_NO_DISPLAY)
+        {
+            break;
+        }
+    }
+    pthread_mutex_unlock(&platform_data_list_mutex);
+
+    return edpy;
 }
 
 static void DestroyAllSurfaces(EplDisplay *pdpy)
@@ -1067,6 +1098,67 @@ static EGLBoolean HookSwapBuffers(EGLDisplay edpy, EGLSurface esurf)
     return HookSwapBuffersWithDamageEXT(edpy, esurf, NULL, 0);
 }
 
+static EGLBoolean HookWaitGL(void)
+{
+    EGLDisplay edpy = eplGetCurrentDisplay();
+    EplDisplay *pdpy = eplDisplayAcquire(edpy);
+    EGLBoolean ret = EGL_FALSE;
+
+    if (pdpy == NULL)
+    {
+        return EGL_FALSE;
+    }
+
+    assert(pdpy->platform->impl->WaitGL != NULL);
+    if (pdpy->platform->impl->WaitGL != NULL)
+    {
+        EplSurface *psurf = eplSurfaceAcquire(pdpy, pdpy->platform->egl.GetCurrentSurface(EGL_DRAW));
+        ret = pdpy->platform->impl->WaitGL(pdpy, psurf);
+        eplSurfaceRelease(pdpy, psurf);
+    }
+    else
+    {
+        // This shouldn't happen, because we only provide an eglWaitGL hook if
+        // we have an implementation. But, if we wanted to handle this case,
+        // then we could just forward the call through to the driver.
+        eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Internal error: eglWaitGL hook should not be called");
+        eplDisplayRelease(pdpy);
+        return EGL_FALSE;
+    }
+
+    eplDisplayRelease(pdpy);
+    return ret;
+}
+
+static EGLBoolean HookWaitNative(void)
+{
+    EGLDisplay edpy = eplGetCurrentDisplay();
+    EplDisplay *pdpy = eplDisplayAcquire(edpy);
+    EGLBoolean ret = EGL_FALSE;
+
+    if (pdpy == NULL)
+    {
+        return EGL_FALSE;
+    }
+
+    assert(pdpy->platform->impl->WaitNative != NULL);
+    if (pdpy->platform->impl->WaitNative != NULL)
+    {
+        EplSurface *psurf = eplSurfaceAcquire(pdpy, pdpy->platform->egl.GetCurrentSurface(EGL_DRAW));
+        ret = pdpy->platform->impl->WaitNative(pdpy, psurf);
+        eplSurfaceRelease(pdpy, psurf);
+    }
+    else
+    {
+        eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Internal error: eglWaitNative hook should not be called");
+        eplDisplayRelease(pdpy);
+        return EGL_FALSE;
+    }
+
+    eplDisplayRelease(pdpy);
+    return ret;
+}
+
 static const EplHookFunc BASE_HOOK_FUNCTIONS[] =
 {
     { "eglCreatePbufferSurface", HookCreatePbufferSurface },
@@ -1085,16 +1177,32 @@ static const size_t BASE_HOOK_FUNCTION_COUNT = sizeof(BASE_HOOK_FUNCTIONS) / siz
 void *eplGetHookAddressExport(void *platformData, const char *name)
 {
     EplPlatformData *plat = platformData;
-    void *func = eplFindHookFunction(BASE_HOOK_FUNCTIONS, BASE_HOOK_FUNCTION_COUNT, name);
+    void *func = NULL;
 
-    if (func == NULL)
+    func = eplFindHookFunction(BASE_HOOK_FUNCTIONS, BASE_HOOK_FUNCTION_COUNT, name);
+    if (func != NULL)
     {
-        if (plat->impl->GetHookFunction != NULL)
+        return func;
+    }
+
+    if (plat->impl->GetHookFunction != NULL)
+    {
+        func = plat->impl->GetHookFunction(plat, name);
+        if (func != NULL)
         {
-            func = plat->impl->GetHookFunction(plat, name);
+            return func;
         }
     }
-    return func;
+
+    if (plat->impl->WaitGL != NULL && strcmp(name, "eglWaitGL") == 0)
+    {
+        return HookWaitGL;
+    }
+    if (plat->impl->WaitNative != NULL && strcmp(name, "eglWaitNative") == 0)
+    {
+        return HookWaitNative;
+    }
+    return NULL;
 }
 
 static EGLBoolean eplIsValidNativeDisplayExport(void *platformData, void *nativeDisplay)
