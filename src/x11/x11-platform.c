@@ -246,6 +246,15 @@ static EGLBoolean eplX11IsSameDisplay(EplPlatformData *plat, EplDisplay *pdpy, E
     // We don't have any other attributes yet
     int screen = -1;
 
+    if (eplX11IsNativeClosed(pdpy->priv->closed_callback))
+    {
+        // This could happen if the application called XCloseDisplay, but then
+        // a subsequent XOpenDisplay call happened to return a Display at the
+        // same address. In that case, we still treat it as a different native
+        // display.
+        return EGL_FALSE;
+    }
+
     if (!ParseDisplayAttribs(plat, platform, attribs, EGL_FALSE, &screen))
     {
         return EGL_FALSE;
@@ -448,9 +457,13 @@ static EGLBoolean eplX11GetPlatformDisplay(EplPlatformData *plat, EplDisplay *pd
     }
     eplX11DisplayInstanceUnref(inst);
 
-    // TODO: If this is EGL_PLATFORM_X11_KHR, and we haven't seen this native
-    // display before, then call XESetCloseDisplay so that we know if the
-    // display gets closed.
+    if (pdpy->platform_enum == EGL_PLATFORM_X11_KHR && native_display != NULL)
+    {
+        // Note that if this fails, then it's not necessarily fatal. We just
+        // won't get a callback when the application calls XCloseDisplay, which
+        // is no worse than with XCB.
+        pdpy->priv->closed_callback = eplX11AddXlibDisplayClosedCallback(native_display);
+    }
 
     return EGL_TRUE;
 }
@@ -460,6 +473,7 @@ static void eplX11CleanupDisplay(EplDisplay *pdpy)
     if (pdpy->priv != NULL)
     {
         eplX11DisplayInstanceUnref(pdpy->priv->inst);
+        eplX11XlibDisplayClosedDataUnref(pdpy->priv->closed_callback);
         free(pdpy->priv->display_env);
         free(pdpy->priv);
         pdpy->priv = NULL;
@@ -754,7 +768,11 @@ static EGLBoolean eplX11InitializeDisplay(EplPlatformData *plat, EplDisplay *pdp
 {
     assert(pdpy->priv->inst == NULL);
 
-    // TODO: Fail if the native display has been closed.
+    if (eplX11IsNativeClosed(pdpy->priv->closed_callback))
+    {
+        eplSetError(plat, EGL_BAD_ACCESS, "The native display has been closed");
+        return EGL_FALSE;
+    }
 
     pdpy->priv->inst = eplX11DisplayInstanceCreate(pdpy, EGL_TRUE);
     if (pdpy->priv->inst == NULL)

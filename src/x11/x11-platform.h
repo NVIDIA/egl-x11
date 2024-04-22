@@ -46,6 +46,15 @@
 #endif /* EGL_EXT_platform_xcb */
 
 /**
+ * Keeps track of a callback that we've registered with XESetCloseDisplay.
+ *
+ * These are used to check whether a native display has been closed.
+ */
+typedef struct _X11XlibDisplayClosedData X11XlibDisplayClosedData;
+
+EPL_REFCOUNT_DECLARE_TYPE_FUNCS(X11XlibDisplayClosedData, eplX11XlibDisplayClosedData);
+
+/**
  * Platform-specific stuff for X11.
  *
  * Currently, this just includes the OpenGL and EGL functions that we'll need.
@@ -172,6 +181,11 @@ struct _EplImplDisplay
      * A pointer to the X11DisplayInstance struct, or NULL if this display isn't initialized.
      */
     X11DisplayInstance *inst;
+
+    /**
+     * A callback to keep track of whether the native display has been closed.
+     */
+    X11XlibDisplayClosedData *closed_callback;
 };
 
 EPL_REFCOUNT_DECLARE_TYPE_FUNCS(X11DisplayInstance, eplX11DisplayInstance);
@@ -186,6 +200,21 @@ extern const EplImplFuncs X11_IMPL_FUNCS;
  * XCB platform library.
  */
 xcb_connection_t *eplX11GetXCBConnection(void *native_display, int *ret_screen);
+
+/**
+ * Registers a callback for when an Xlib Display is closed.
+ *
+ * Note that XCB doesn't have any equivalent to XESetCloseDisplay.
+ */
+X11XlibDisplayClosedData *eplX11AddXlibDisplayClosedCallback(void *xlib_native_display);
+
+/**
+ * Returns true if a native display has been closed.
+ *
+ * Note that this only works for an Xlib Display, because XCB doesn't have any
+ * equivalent to XESetCloseDisplay.
+ */
+EGLBoolean eplX11IsNativeClosed(X11XlibDisplayClosedData *data);
 
 EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
         const EGLExtDriver *driver, EGLExtPlatform *extplatform,
