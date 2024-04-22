@@ -27,6 +27,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <sys/socket.h>
 #include <assert.h>
@@ -61,6 +62,16 @@ EPL_REFCOUNT_DEFINE_TYPE_FUNCS(X11DisplayInstance, eplX11DisplayInstance, refcou
 
 static void eplX11CleanupDisplay(EplDisplay *pdpy);
 
+static EGLBoolean LoadProcHelper(EplPlatformData *plat, void *handle, void **ptr, const char *name)
+{
+    *ptr = dlsym(handle, name);
+    if (*ptr == NULL)
+    {
+        return EGL_FALSE;
+    }
+    return EGL_TRUE;
+}
+
 EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
         const EGLExtDriver *driver, EGLExtPlatform *extplatform,
         EGLint platform_enum)
@@ -68,6 +79,7 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
     EplPlatformData *plat = eplPlatformBaseAllocate(major, minor,
         driver, extplatform, platform_enum, &X11_IMPL_FUNCS,
         sizeof(EplImplPlatform));
+    EGLBoolean timelineSupported = EGL_TRUE;
     pfn_eglPlatformGetVersionNVX ptr_eglPlatformGetVersionNVX;
 
     if (plat == NULL)
@@ -90,6 +102,10 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
     plat->priv->egl.SwapInterval = driver->getProcAddress("eglSwapInterval");
     plat->priv->egl.QueryDmaBufFormatsEXT = driver->getProcAddress("eglQueryDmaBufFormatsEXT");
     plat->priv->egl.QueryDmaBufModifiersEXT = driver->getProcAddress("eglQueryDmaBufModifiersEXT");
+    plat->priv->egl.CreateSync = driver->getProcAddress("eglCreateSync");
+    plat->priv->egl.DestroySync = driver->getProcAddress("eglDestroySync");
+    plat->priv->egl.WaitSync = driver->getProcAddress("eglWaitSync");
+    plat->priv->egl.DupNativeFenceFDANDROID = driver->getProcAddress("eglDupNativeFenceFDANDROID");
     plat->priv->egl.Flush = driver->getProcAddress("glFlush");
     plat->priv->egl.Finish = driver->getProcAddress("glFinish");
     plat->priv->egl.PlatformImportColorBufferNVX = driver->getProcAddress("eglPlatformImportColorBufferNVX");
@@ -100,10 +116,15 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
     plat->priv->egl.PlatformCopyColorBufferNVX = driver->getProcAddress("eglPlatformCopyColorBufferNVX");
     plat->priv->egl.PlatformAllocColorBufferNVX = driver->getProcAddress("eglPlatformAllocColorBufferNVX");
     plat->priv->egl.PlatformExportColorBufferNVX = driver->getProcAddress("eglPlatformExportColorBufferNVX");
+
     if (plat->priv->egl.QueryDisplayAttribKHR == NULL
+            || plat->priv->egl.SwapInterval == NULL
             || plat->priv->egl.QueryDmaBufFormatsEXT == NULL
             || plat->priv->egl.QueryDmaBufModifiersEXT == NULL
-            || plat->priv->egl.SwapInterval == NULL
+            || plat->priv->egl.CreateSync == NULL
+            || plat->priv->egl.DestroySync == NULL
+            || plat->priv->egl.WaitSync == NULL
+            || plat->priv->egl.DupNativeFenceFDANDROID == NULL
             || plat->priv->egl.Finish == NULL
             || plat->priv->egl.Flush == NULL
             || plat->priv->egl.PlatformImportColorBufferNVX == NULL
@@ -118,6 +139,29 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
         eplPlatformBaseInitFail(plat);
         return EGL_FALSE;
     }
+
+#define LOAD_PROC(supported, prefix, group, name) \
+    supported = supported && LoadProcHelper(plat, RTLD_DEFAULT, (void **) &plat->priv->group.name, prefix #name)
+
+    // Load the functions that we'll need for explicit sync, if they're
+    // available. If we don't find these, then it's not fatal.
+    LOAD_PROC(timelineSupported, "xcb_", xcb, dri3_import_syncobj);
+    LOAD_PROC(timelineSupported, "xcb_", xcb, dri3_free_syncobj);
+    LOAD_PROC(timelineSupported, "xcb_", xcb, present_pixmap_synced);
+    LOAD_PROC(timelineSupported, "drm", drm, GetCap);
+    LOAD_PROC(timelineSupported, "drm", drm, SyncobjCreate);
+    LOAD_PROC(timelineSupported, "drm", drm, SyncobjDestroy);
+    LOAD_PROC(timelineSupported, "drm", drm, SyncobjHandleToFD);
+    LOAD_PROC(timelineSupported, "drm", drm, SyncobjFDToHandle);
+    LOAD_PROC(timelineSupported, "drm", drm, SyncobjImportSyncFile);
+    LOAD_PROC(timelineSupported, "drm", drm, SyncobjExportSyncFile);
+    LOAD_PROC(timelineSupported, "drm", drm, SyncobjTimelineSignal);
+    LOAD_PROC(timelineSupported, "drm", drm, SyncobjTimelineWait);
+    LOAD_PROC(timelineSupported, "drm", drm, SyncobjTransfer);
+
+    plat->priv->timeline_funcs_supported = timelineSupported;
+
+#undef LOAD_PROC
 
     eplPlatformBaseInitFinish(plat);
     return EGL_TRUE;

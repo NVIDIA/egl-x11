@@ -31,7 +31,11 @@
 #include <EGL/eglext.h>
 
 #include <xcb/xcb.h>
+#include <xcb/dri3.h>
+#include <xcb/xproto.h>
+#include <xcb/present.h>
 #include <gbm.h>
+#include <xf86drm.h>
 
 #include "platform-impl.h"
 #include "platform-utils.h"
@@ -44,6 +48,10 @@
 #define EGL_PLATFORM_XCB_EXT              0x31DC
 #define EGL_PLATFORM_XCB_SCREEN_EXT       0x31DE
 #endif /* EGL_EXT_platform_xcb */
+
+#ifndef XCB_PRESENT_CAPABILITY_SYNCOBJ
+#define XCB_PRESENT_CAPABILITY_SYNCOBJ 16
+#endif
 
 /**
  * Keeps track of a callback that we've registered with XESetCloseDisplay.
@@ -67,6 +75,10 @@ struct _EplImplPlatform
         PFNEGLSWAPINTERVALPROC SwapInterval;
         PFNEGLQUERYDMABUFFORMATSEXTPROC QueryDmaBufFormatsEXT;
         PFNEGLQUERYDMABUFMODIFIERSEXTPROC QueryDmaBufModifiersEXT;
+        PFNEGLCREATESYNCPROC CreateSync;
+        PFNEGLDESTROYSYNCPROC DestroySync;
+        PFNEGLWAITSYNCPROC WaitSync;
+        PFNEGLDUPNATIVEFENCEFDANDROIDPROC DupNativeFenceFDANDROID;
         void (* Flush) (void);
         void (* Finish) (void);
 
@@ -79,6 +91,45 @@ struct _EplImplPlatform
         pfn_eglPlatformAllocColorBufferNVX PlatformAllocColorBufferNVX;
         pfn_eglPlatformExportColorBufferNVX PlatformExportColorBufferNVX;
     } egl;
+
+    struct
+    {
+        xcb_void_cookie_t (* dri3_import_syncobj) (xcb_connection_t *c, uint32_t syncobj, xcb_drawable_t drawable, int32_t syncobj_fd);
+        xcb_void_cookie_t (* dri3_free_syncobj) (xcb_connection_t *c, uint32_t syncobj);
+
+        xcb_void_cookie_t (* present_pixmap_synced) (xcb_connection_t *c, xcb_window_t window,
+                xcb_pixmap_t pixmap, uint32_t serial,
+                xcb_xfixes_region_t valid, xcb_xfixes_region_t update, int16_t x_off, int16_t y_off,
+                xcb_randr_crtc_t target_crtc,
+                uint32_t acquire_syncobj, uint32_t release_syncobj,
+                uint64_t acquire_point, uint64_t release_point,
+                uint32_t options, uint64_t target_msc, uint64_t divisor, uint64_t remainder,
+                uint32_t notifies_len, const xcb_present_notify_t *notifies);
+    } xcb;
+
+    struct
+    {
+        int (* GetCap) (int fd, uint64_t capability, uint64_t *value);
+        int (* SyncobjCreate) (int fd, uint32_t flags, uint32_t *handle);
+        int (* SyncobjDestroy) (int fd, uint32_t handle);
+        int (* SyncobjHandleToFD) (int fd, uint32_t handle, int *obj_fd);
+        int (* SyncobjFDToHandle) (int fd, int obj_fd, uint32_t *handle);
+        int (* SyncobjImportSyncFile) (int fd, uint32_t handle, int sync_file_fd);
+        int (* SyncobjExportSyncFile) (int fd, uint32_t handle, int *sync_file_fd);
+
+        int (* SyncobjTimelineSignal) (int fd, const uint32_t *handles,
+                            uint64_t *points, uint32_t handle_count);
+        int (* SyncobjTimelineWait) (int fd, uint32_t *handles, uint64_t *points,
+                          unsigned num_handles,
+                          int64_t timeout_nsec, unsigned flags,
+                          uint32_t *first_signaled);
+        int (* SyncobjTransfer) (int fd,
+                          uint32_t dst_handle, uint64_t dst_point,
+                          uint32_t src_handle, uint64_t src_point,
+                          uint32_t flags);
+    } drm;
+
+    EGLBoolean timeline_funcs_supported;
 };
 
 /**

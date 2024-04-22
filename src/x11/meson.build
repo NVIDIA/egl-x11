@@ -19,6 +19,7 @@ dep_x11_xcb = dependency('x11-xcb', required: get_option('xlib'))
 dep_xcb = dependency('xcb')
 dep_xcb_present = dependency('xcb-present')
 dep_xcb_dri3 = dependency('xcb-dri3')
+dep_dl = meson.get_compiler('c').find_library('dl', required : false)
 
 enable_xlib = (get_option('xlib').allowed() and dep_x11.found() and dep_x11_xcb.found())
 
@@ -29,6 +30,7 @@ x11_deps = [
   dep_xcb,
   dep_xcb_present,
   dep_xcb_dri3,
+  dep_dl,
 ]
 
 x11_common_source = [
@@ -44,6 +46,7 @@ if get_option('xcb')
       'x11-platform-xcb.c'
     ],
     include_directories: [ inc_base ],
+    c_args : ['-D_GNU_SOURCE'],
     dependencies: [
       x11_deps,
       dep_eglexternal,
@@ -64,6 +67,7 @@ if enable_xlib
       'x11-platform-xlib.c',
     ],
     include_directories: [ inc_base ],
+    c_args : ['-D_GNU_SOURCE'],
     dependencies: [
       x11_deps,
       dep_x11,
