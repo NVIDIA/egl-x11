@@ -35,6 +35,7 @@ x11_deps = [
 
 x11_common_source = [
   'x11-platform.c',
+  'x11-config.c',
   'x11-window.c',
   'x11-pixmap.c',
 ]

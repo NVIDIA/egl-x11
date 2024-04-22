@@ -767,6 +767,15 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
     }
     inst->internal_display = eplInternalDisplayRef(internalDpy);
 
+    if (!eplX11InitDriverFormats(pdpy->platform, inst))
+    {
+        // This should never happen. If it does, then we've got a problem in
+        // the driver.
+        eplSetError(pdpy->platform, EGL_BAD_ALLOC, "No supported image formats from driver");
+        eplX11DisplayInstanceUnref(inst);
+        return NULL;
+    }
+
     // TODO: Check supported formats and modifiers, and build the EGLConfig
     // list.
 
@@ -777,6 +786,8 @@ static void eplX11DisplayInstanceFree(X11DisplayInstance *inst)
 {
     eplConfigListFree(inst->configs);
     inst->configs = NULL;
+
+    eplX11CleanupDriverFormats(inst);
 
     if (inst->conn != NULL && inst->own_display)
     {

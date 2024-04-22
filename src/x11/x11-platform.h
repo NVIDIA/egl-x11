@@ -133,6 +133,24 @@ struct _EplImplPlatform
 };
 
 /**
+ * Keeps track of format and format modifier support in the driver.
+ *
+ * This is used to cache the results of eglQueryDmaBufFormatsEXT and
+ * eglQueryDmaBufModifiersEXT.
+ */
+typedef struct
+{
+    // Put the fourcc code as the first element so that we can use bsearch
+    // with just the fourcc code for a key.
+    uint32_t fourcc;
+    const EplFormatInfo *fmt;
+    uint64_t *modifiers;
+    int num_modifiers;
+    uint64_t *external_modifiers;
+    int num_external_modifiers;
+} X11DriverFormat;
+
+/**
  * Contains per-display data that's initialized in eglInitialize and then
  * doesn't change until eglTerminate.
  *
@@ -209,6 +227,12 @@ typedef struct
      * The list of EGLConfigs.
      */
     EplConfigList *configs;
+
+    /**
+     * The list of formats and modifiers that the driver supports.
+     */
+    X11DriverFormat *driver_formats;
+    int num_driver_formats;
 } X11DisplayInstance;
 
 /**
@@ -279,5 +303,24 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
 
 EGLBoolean eplX11SwapBuffers(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *surf,
         const EGLint *rects, EGLint n_rects);
+
+/**
+ * Initializes the list of driver formats.
+ *
+ * \param plat The platform data.
+ * \param inst The X11DisplayInstance to fill in.
+ * \return EGL_TRUE on success, or EGL_FALSE on failure.
+ */
+EGLBoolean eplX11InitDriverFormats(EplPlatformData *plat, X11DisplayInstance *inst);
+
+/**
+ * Cleans up the format list that was initialized in eplX11InitDriverFormats.
+ */
+void eplX11CleanupDriverFormats(X11DisplayInstance *inst);
+
+/**
+ * Finds the X11DriverFormat struct for a given format.
+ */
+X11DriverFormat *eplX11FindDriverFormat(X11DisplayInstance *inst, uint32_t fourcc);
 
 #endif // X11_PLATFORM_H
