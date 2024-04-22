@@ -196,3 +196,102 @@ X11DriverFormat *eplX11FindDriverFormat(X11DisplayInstance *inst, uint32_t fourc
             sizeof(X11DriverFormat), CompareFormatSupportInfo);
 }
 
+static xcb_visualid_t FindVisualForFormat(EplPlatformData *plat, xcb_connection_t *conn, xcb_screen_t *xscreen, const EplFormatInfo *fmt)
+{
+    xcb_depth_iterator_t depthIter;
+    int depth = fmt->colors[0] + fmt->colors[1] + fmt->colors[2] + fmt->colors[3];
+    uint32_t red_mask   = ((1 << fmt->colors[0]) - 1) << fmt->offset[0];
+    uint32_t green_mask = ((1 << fmt->colors[1]) - 1) << fmt->offset[1];
+    uint32_t blue_mask  = ((1 << fmt->colors[2]) - 1) << fmt->offset[2];
+
+    for (depthIter = xcb_screen_allowed_depths_iterator(xscreen);
+            depthIter.rem > 0;
+            xcb_depth_next(&depthIter))
+    {
+        if (depthIter.data->depth == depth)
+        {
+            xcb_visualtype_iterator_t visIter = xcb_depth_visuals_iterator(depthIter.data);
+
+            for (visIter = xcb_depth_visuals_iterator(depthIter.data);
+                    visIter.rem > 0;
+                    xcb_visualtype_next(&visIter))
+            {
+                if (visIter.data->_class == XCB_VISUAL_CLASS_TRUE_COLOR
+                        && visIter.data->red_mask == red_mask
+                        && visIter.data->green_mask == green_mask
+                        && visIter.data->blue_mask == blue_mask)
+                {
+                    return visIter.data->visual_id;
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+static void SetupConfig(EplPlatformData *plat, X11DisplayInstance *inst, EplConfig *config)
+{
+    X11DriverFormat *support = NULL;
+    EGLint fourcc = DRM_FORMAT_INVALID;
+    xcb_visualid_t visual;
+
+    config->surfaceMask &= ~(EGL_WINDOW_BIT | EGL_PIXMAP_BIT);
+
+    // Query the fourcc code from the driver.
+    if (plat->priv->egl.PlatformGetConfigAttribNVX(inst->internal_display->edpy,
+                config->config, EGL_LINUX_DRM_FOURCC_EXT, &fourcc))
+    {
+        config->fourcc = (uint32_t) fourcc;
+    }
+    else
+    {
+        config->fourcc = DRM_FORMAT_INVALID;
+    }
+
+    if (config->fourcc == DRM_FORMAT_INVALID)
+    {
+        // Without a format, we can't do anything with this config.
+        return;
+    }
+
+    support = eplX11FindDriverFormat(inst, fourcc);
+    if (support == NULL)
+    {
+        // The driver doesn't support importing a dma-buf with this format.
+        return;
+    }
+
+    if (!inst->force_prime)
+    {
+        config->surfaceMask |= EGL_PIXMAP_BIT;
+    }
+
+    visual = FindVisualForFormat(inst->platform, inst->conn, inst->xscreen, support->fmt);
+    if (visual != 0)
+    {
+        config->nativeVisualID = visual;
+        config->nativeVisualType = XCB_VISUAL_CLASS_TRUE_COLOR;
+        config->surfaceMask |= EGL_WINDOW_BIT;
+    }
+    else
+    {
+        config->nativeVisualType = EGL_NONE;
+    }
+}
+
+EGLBoolean eplX11InitConfigList(EplPlatformData *plat, X11DisplayInstance *inst)
+{
+    int i;
+
+    inst->configs = eplConfigListCreate(plat, inst->internal_display->edpy);
+    if (inst->configs == NULL)
+    {
+        eplSetError(plat, EGL_BAD_ALLOC, "Can't find any usable EGLConfigs");
+        return EGL_FALSE;
+    }
+    for (i=0; i<inst->configs->num_configs; i++)
+    {
+        SetupConfig(plat, inst, &inst->configs->configs[i]);
+    }
+    return EGL_TRUE;
+}

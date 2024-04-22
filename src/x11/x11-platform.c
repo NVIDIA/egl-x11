@@ -1110,7 +1110,14 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
         return NULL;
     }
 
-    // TODO: Build the EGLConfig list
+    if (from_init)
+    {
+        if (!eplX11InitConfigList(pdpy->platform, inst))
+        {
+            eplX11DisplayInstanceUnref(inst);
+            return NULL;
+        }
+    }
 
     return inst;
 }

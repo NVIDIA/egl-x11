@@ -396,4 +396,6 @@ void eplX11CleanupDriverFormats(X11DisplayInstance *inst);
  */
 X11DriverFormat *eplX11FindDriverFormat(X11DisplayInstance *inst, uint32_t fourcc);
 
+EGLBoolean eplX11InitConfigList(EplPlatformData *plat, X11DisplayInstance *inst);
+
 #endif // X11_PLATFORM_H
