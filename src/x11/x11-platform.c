@@ -44,6 +44,8 @@
 #include <xcb/xproto.h>
 #include <xcb/present.h>
 
+#include "platform-utils.h"
+
 static const char *FORCE_ENABLE_ENV = "__NV_FORCE_ENABLE_X11_EGL_PLATFORM";
 
 #define CLIENT_EXTENSIONS_XLIB "EGL_KHR_platform_x11 EGL_EXT_platform_x11"
@@ -53,8 +55,10 @@ static const EGLint NEED_PLATFORM_SURFACE_MAJOR = 0;
 static const EGLint NEED_PLATFORM_SURFACE_MINOR = 1;
 static const uint32_t NEED_DRI3_MAJOR = 1;
 static const uint32_t NEED_DRI3_MINOR = 2;
+static const uint32_t REQUEST_DRI3_MINOR = 4;
 static const uint32_t NEED_PRESENT_MAJOR = 1;
 static const uint32_t NEED_PRESENT_MINOR = 2;
+static const uint32_t REQUEST_PRESENT_MINOR = 4;
 
 static X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean from_init);
 static void eplX11DisplayInstanceFree(X11DisplayInstance *inst);
@@ -221,12 +225,16 @@ void *eplX11GetHookFunction(EplPlatformData *plat, const char *name)
  * \param report_errors If true, then report any invalid attributes.
  * \param[out] ret_screen Returns the screen number, or -1 if it wasn't
  *      specified.
+ * \param[out] ret_device Returns the EGL_DEVICE_EXT attribute, or
+ *      EGL_NO_DEVICE if it wasn't specified.
  * \return EGL_TRUE on success, or EGL_FALSE if the attributes were invalid.
  */
 static EGLBoolean ParseDisplayAttribs(EplPlatformData *plat, EGLint platform,
-        const EGLAttrib *attribs, EGLBoolean report_errors, int *ret_screen)
+        const EGLAttrib *attribs, EGLBoolean report_errors,
+        int *ret_screen, EGLDeviceEXT *ret_device)
 {
     EGLint screenAttrib = EGL_NONE;
+    EGLDeviceEXT device = EGL_NO_DEVICE_EXT;
     int screen = -1;
 
     if (platform == EGL_PLATFORM_X11_KHR)
@@ -265,6 +273,10 @@ static EGLBoolean ParseDisplayAttribs(EplPlatformData *plat, EGLint platform,
                     return EGL_FALSE;
                 }
             }
+            else if (attribs[i] == EGL_DEVICE_EXT)
+            {
+                device = (EGLDeviceEXT) attribs[i + 1];
+            }
             else
             {
                 if (report_errors)
@@ -280,6 +292,10 @@ static EGLBoolean ParseDisplayAttribs(EplPlatformData *plat, EGLint platform,
     {
         *ret_screen = screen;
     }
+    if (ret_device != NULL)
+    {
+        *ret_device = device;
+    }
 
     return EGL_TRUE;
 }
@@ -287,8 +303,8 @@ static EGLBoolean ParseDisplayAttribs(EplPlatformData *plat, EGLint platform,
 static EGLBoolean eplX11IsSameDisplay(EplPlatformData *plat, EplDisplay *pdpy, EGLint platform,
         void *native_display, const EGLAttrib *attribs)
 {
-    // We don't have any other attributes yet
     int screen = -1;
+    EGLDeviceEXT device = EGL_NO_DEVICE_EXT;
 
     if (eplX11IsNativeClosed(pdpy->priv->closed_callback))
     {
@@ -299,12 +315,16 @@ static EGLBoolean eplX11IsSameDisplay(EplPlatformData *plat, EplDisplay *pdpy, E
         return EGL_FALSE;
     }
 
-    if (!ParseDisplayAttribs(plat, platform, attribs, EGL_FALSE, &screen))
+    if (!ParseDisplayAttribs(plat, platform, attribs, EGL_FALSE, &screen, &device))
     {
         return EGL_FALSE;
     }
 
     if (pdpy->priv->screen_attrib != screen)
+    {
+        return EGL_FALSE;
+    }
+    if (pdpy->priv->device_attrib != device)
     {
         return EGL_FALSE;
     }
@@ -370,42 +390,51 @@ static EGLDeviceEXT FindDeviceForFD(EplPlatformData *plat, int fd)
         return EGL_NO_DEVICE_EXT;
     }
 
-    if ((dev->available_nodes & (1 << DRM_NODE_PRIMARY)) == 0
-            || dev->nodes[DRM_NODE_PRIMARY] == NULL)
+    if ((dev->available_nodes & (1 << DRM_NODE_PRIMARY)) != 0
+            && dev->nodes[DRM_NODE_PRIMARY] != NULL)
     {
-        return EGL_NO_DEVICE_EXT;
+        EGLBoolean isNV = EGL_FALSE;
+
+        /*
+         * Call into libdrm to figure out whether this is an NVIDIA device
+         * before we call eglQueryDevicesEXT.
+         *
+         * Calling eglQueryDevicesEXT could require waking up the GPU, which
+         * can very slow and wastes battery.
+         */
+        if (dev->bustype == DRM_BUS_PCI)
+        {
+            // For a PCI device, just look at the PCI vendor ID.
+            isNV = (dev->deviceinfo.pci->vendor_id == 0x10de);
+        }
+        else
+        {
+            // Tegra GPU's are not PCI devices, so for those, we have to check
+            // the driver name instead.
+            drmVersion *version = drmGetVersion(fd);
+            if (version != NULL)
+            {
+                if (version->name != NULL)
+                {
+                    if (strcmp(version->name, "nvidia-drm") == 0
+                            || strcmp(version->name, "tegra-udrm") == 0
+                            || strcmp(version->name, "tegra") == 0)
+                    {
+                        isNV = EGL_TRUE;
+                    }
+                }
+                drmFreeVersion(version);
+            }
+        }
+
+        if (isNV)
+        {
+            found = FindDeviceForNode(plat, dev->nodes[DRM_NODE_PRIMARY]);
+        }
     }
 
-    found = FindDeviceForNode(plat, dev->nodes[DRM_NODE_PRIMARY]);
     drmFreeDevice(&dev);
     return found;
-}
-
-static EplInternalDisplay *MakeInternalDisplay(EplPlatformData *plat, EGLDeviceEXT edev, int fd)
-{
-    EGLAttrib attribs[5] = {};
-    EGLDisplay handle = EGL_NO_DISPLAY;
-    int num = 0;
-
-    if (plat->extensions.display_reference)
-    {
-        attribs[num++] = EGL_TRACK_REFERENCES_KHR;
-        attribs[num++] = EGL_TRUE;
-    }
-    if (fd >= 0)
-    {
-        attribs[num++] = EGL_DRM_MASTER_FD_EXT;
-        attribs[num++] = fd;
-    }
-    attribs[num] = EGL_NONE;
-
-    handle = plat->egl.GetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, edev, attribs);
-    if (handle == EGL_NO_DISPLAY)
-    {
-        return EGL_NO_DISPLAY;
-    }
-
-    return eplLookupInternalDisplay(plat, handle);
 }
 
 /**
@@ -482,10 +511,74 @@ static EGLBoolean eplX11GetPlatformDisplay(EplPlatformData *plat, EplDisplay *pd
     }
 
     if (!ParseDisplayAttribs(plat, pdpy->platform_enum, attribs, EGL_TRUE,
-                &pdpy->priv->screen_attrib))
+                &pdpy->priv->screen_attrib, &pdpy->priv->device_attrib))
     {
         eplX11CleanupDisplay(pdpy);
         return EGL_FALSE;
+    }
+
+    env = getenv("__NV_PRIME_RENDER_OFFLOAD_PROVIDER");
+    if (env != NULL)
+    {
+        pdpy->priv->requested_device = FindDeviceForNode(plat, env);
+        pdpy->priv->enable_alt_device = EGL_TRUE;
+    }
+    else
+    {
+        env = getenv("__NV_PRIME_RENDER_OFFLOAD");
+        if (env != NULL && atoi(env) != 0)
+        {
+            pdpy->priv->enable_alt_device = EGL_TRUE;
+        }
+    }
+
+    if (pdpy->priv->requested_device == EGL_NO_DEVICE_EXT)
+    {
+        // If the caller specified a device, then make sure it's valid.
+        if (pdpy->priv->device_attrib != EGL_NO_DEVICE_EXT)
+        {
+            EGLint num = 0;
+            EGLDeviceEXT *devices = eplGetAllDevices(plat, &num);
+            EGLBoolean valid = EGL_FALSE;
+            EGLint i;
+
+            if (devices == NULL)
+            {
+                eplX11CleanupDisplay(pdpy);
+                return EGL_FALSE;
+            }
+
+            for (i=0; i<num; i++)
+            {
+                if (devices[i] == pdpy->priv->device_attrib)
+                {
+                    valid = EGL_TRUE;
+                    break;
+                }
+            }
+            free(devices);
+
+            if (valid)
+            {
+                // The requested device is a valid NVIDIA device, so use it.
+                pdpy->priv->requested_device = pdpy->priv->device_attrib;
+            }
+            else if (pdpy->priv->enable_alt_device)
+            {
+                // The requested device is not an NVIDIA device, but PRIME is
+                // enabled, so we'll pick an NVIDIA device during eglInitialize.
+                pdpy->priv->requested_device = EGL_NO_DEVICE_EXT;
+            }
+            else
+            {
+                // The requested device is not an NVIDIA device and PRIME is not
+                // enabled. Return failure to let another driver handle it.
+                eplSetError(plat, EGL_BAD_MATCH, "Unknown or non-NV device handle %p",
+                        pdpy->priv->device_attrib);
+                eplX11CleanupDisplay(pdpy);
+                return EGL_FALSE;
+            }
+        }
     }
 
     /*
@@ -530,21 +623,24 @@ static void eplX11CleanupDisplay(EplDisplay *pdpy)
  * This checks that we're using a domain socket, and checks the versions of the
  * DRI3 and Present extensions.
  */
-static EGLBoolean CheckServerExtensions(xcb_connection_t *conn)
+static EGLBoolean CheckServerExtensions(X11DisplayInstance *inst)
 {
     const char *env;
     struct sockaddr addr;
     socklen_t addrlen = sizeof(addr);
+    const xcb_query_extension_reply_t *extReply;
     xcb_generic_error_t *error = NULL;
 
     xcb_dri3_query_version_cookie_t dri3Cookie;
     xcb_dri3_query_version_reply_t *dri3Reply = NULL;
     xcb_present_query_version_cookie_t presentCookie;
     xcb_present_query_version_reply_t *presentReply = NULL;
+    xcb_query_extension_reply_t *nvglxReply = NULL;
+    EGLBoolean success = EGL_FALSE;
 
     // Check to make sure that we're using a domain socket, since we need to be
     // able to push file descriptors through it.
-    if (getsockname(xcb_get_file_descriptor(conn), &addr, &addrlen) != 0)
+    if (getsockname(xcb_get_file_descriptor(inst->conn), &addr, &addrlen) != 0)
     {
         return EGL_FALSE;
     }
@@ -553,11 +649,13 @@ static EGLBoolean CheckServerExtensions(xcb_connection_t *conn)
         return EGL_FALSE;
     }
 
-    if (xcb_get_extension_data(conn, &xcb_dri3_id) == NULL)
+    extReply = xcb_get_extension_data(inst->conn, &xcb_dri3_id);
+    if (extReply == NULL || !extReply->present)
     {
         return EGL_FALSE;
     }
-    if (xcb_get_extension_data(conn, &xcb_present_id) == NULL)
+    extReply = xcb_get_extension_data(inst->conn, &xcb_present_id);
+    if (extReply == NULL || !extReply->present)
     {
         return EGL_FALSE;
     }
@@ -576,57 +674,71 @@ static EGLBoolean CheckServerExtensions(xcb_connection_t *conn)
          * servers or non-Linux systems.
          */
         const char NVGLX_EXTENSION_NAME[] = "NV-GLX";
-        xcb_query_extension_cookie_t extCookie = xcb_query_extension(conn,
+        xcb_query_extension_cookie_t extCookie = xcb_query_extension(inst->conn,
                 sizeof(NVGLX_EXTENSION_NAME) - 1, NVGLX_EXTENSION_NAME);
-        xcb_query_extension_reply_t *extReply = xcb_query_extension_reply(conn, extCookie, &error);
-        if (extReply == NULL)
+        nvglxReply = xcb_query_extension_reply(inst->conn, extCookie, &error);
+        if (nvglxReply == NULL)
         {
             // XQueryExtension isn't supposed to generate any errors.
-            free(error);
-            return EGL_FALSE;
+            goto done;
         }
 
-        if (extReply->present)
+        if (nvglxReply->present)
         {
-            free(extReply);
-            return EGL_FALSE;
+            goto done;
         }
-        free(extReply);
     }
 
     // TODO: Send these requests in parallel, not in sequence
-    dri3Cookie = xcb_dri3_query_version(conn, NEED_DRI3_MAJOR, NEED_DRI3_MINOR);
-    dri3Reply = xcb_dri3_query_version_reply(conn, dri3Cookie, &error);
+    dri3Cookie = xcb_dri3_query_version(inst->conn, NEED_DRI3_MAJOR, REQUEST_DRI3_MINOR);
+    dri3Reply = xcb_dri3_query_version_reply(inst->conn, dri3Cookie, &error);
     if (dri3Reply == NULL)
     {
-        free(dri3Reply);
-        return EGL_FALSE;
+        goto done;
     }
     if (dri3Reply->major_version != NEED_DRI3_MAJOR || dri3Reply->minor_version < NEED_DRI3_MINOR)
     {
-        free(dri3Reply);
-        return EGL_FALSE;
+        goto done;
     }
-    free(dri3Reply);
 
-    presentCookie = xcb_present_query_version(conn, NEED_PRESENT_MAJOR, NEED_PRESENT_MINOR);
-    presentReply = xcb_present_query_version_reply(conn, presentCookie, &error);
+    presentCookie = xcb_present_query_version(inst->conn, NEED_PRESENT_MAJOR, REQUEST_PRESENT_MINOR);
+    presentReply = xcb_present_query_version_reply(inst->conn, presentCookie, &error);
     if (presentReply == NULL)
     {
-        free(presentReply);
-        return EGL_FALSE;
+        goto done;
     }
     if (presentReply->major_version != NEED_PRESENT_MAJOR || presentReply->minor_version < NEED_PRESENT_MINOR)
     {
-        free(presentReply);
-        return EGL_FALSE;
+        goto done;
     }
-    free(presentReply);
 
-    return EGL_TRUE;
+    if (inst->platform->priv->timeline_funcs_supported
+            && dri3Reply->minor_version >= 4
+            && presentReply->minor_version >= 4)
+    {
+        /*
+         * The server supports the necessary extension versions, and we've got
+         * the necessary driver and library support in the client. Note that
+         * we still have to send a PresentQueryCapabilities request in
+         * eplX11CreateWindowSurface to check whether the server actually
+         * supports timeline objects.
+         */
+        inst->supports_explicit_sync = EGL_TRUE;
+    }
+
+    success = EGL_TRUE;
+
+done:
+    free(nvglxReply);
+    free(presentReply);
+    free(dri3Reply);
+    free(error);
+
+    return success;
 }
 
-static EGLBoolean CheckServerFormatSupport(X11DisplayInstance *inst)
+static EGLBoolean CheckServerFormatSupport(X11DisplayInstance *inst,
+        EGLBoolean *ret_supports_direct, EGLBoolean *ret_supports_linear)
 {
     const X11DriverFormat *fmt = NULL;
     xcb_dri3_get_supported_modifiers_cookie_t cookie;
@@ -653,6 +765,17 @@ static EGLBoolean CheckServerFormatSupport(X11DisplayInstance *inst)
 
     numScreenMods = xcb_dri3_get_supported_modifiers_screen_modifiers_length(reply);
     screenMods = xcb_dri3_get_supported_modifiers_screen_modifiers(reply);
+
+    *ret_supports_linear = EGL_FALSE;
+    for (i=0; i<numScreenMods; i++)
+    {
+        if (screenMods[i] == DRM_FORMAT_MOD_LINEAR)
+        {
+            *ret_supports_linear = EGL_TRUE;
+            break;
+        }
+    }
+
     for (i=0; i<numScreenMods && !found; i++)
     {
         for (j=0; j<fmt->num_modifiers && !found; j++)
@@ -663,9 +786,10 @@ static EGLBoolean CheckServerFormatSupport(X11DisplayInstance *inst)
             }
         }
     }
+    *ret_supports_direct = found;
 
     free(reply);
-    return found;
+    return EGL_TRUE;
 }
 
 X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean from_init)
@@ -673,7 +797,10 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
     X11DisplayInstance *inst = NULL;
     int fd = -1;
     const char *gbmName = NULL;
+    EGLDeviceEXT serverDevice = EGL_NO_DEVICE_EXT;
     EplInternalDisplay *internalDpy = NULL;
+    EGLBoolean supportsDirect = EGL_FALSE;
+    EGLBoolean supportsLinear = EGL_FALSE;
 
     inst = calloc(1, sizeof(X11DisplayInstance));
     if (inst == NULL)
@@ -746,7 +873,7 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
         return NULL;
     }
 
-    if (!CheckServerExtensions(inst->conn))
+    if (!CheckServerExtensions(inst))
     {
         if (from_init)
         {
@@ -764,6 +891,108 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
         return NULL;
     }
 
+    serverDevice = FindDeviceForFD(pdpy->platform, fd);
+    if (serverDevice != EGL_NO_DEVICE_EXT)
+    {
+        /*
+         * The server is running on an NVIDIA device. NV->NV offloading doesn't
+         * work, so our options are the server device or nothing.
+         *
+         * So, if the user/caller didn't request a specific device, or
+         * requested the same device as the server device, then we're fine.
+         *
+         * Or, if PRIME is enabled, then we're allowed to pick a different
+         * device, so we can still use the server device.
+         */
+        if (pdpy->priv->requested_device == EGL_NO_DEVICE_EXT
+                || pdpy->priv->requested_device == serverDevice
+                || pdpy->priv->enable_alt_device)
+        {
+            inst->device = serverDevice;
+        }
+        else
+        {
+            if (!from_init && pdpy->priv->device_attrib != EGL_NO_DEVICE_EXT)
+            {
+                eplSetError(pdpy->platform, EGL_BAD_MATCH, "NV -> NV offloading is not supported");
+            }
+            close(fd);
+            eplX11DisplayInstanceUnref(inst);
+            return NULL;
+        }
+
+        inst->supports_implicit_sync = EGL_FALSE;
+    }
+    else
+    {
+        /*
+         * The server is not running on an NVIDIA device.
+         *
+         * If the user/caller requested a particular device, then use it.
+         *
+         * Otherwise, if PRIME is enabled, then we'll pick an arbitrary NVIDIA
+         * device to use.
+         *
+         * Otherwise, we'll fail. If this is from eglGetPlatformDisplay, then
+         * eglGetPlatformDisplay will fail and the next vendor library can try.
+         */
+
+        if (pdpy->priv->requested_device != EGL_NO_DEVICE_EXT)
+        {
+            // Pick whatever device the user/caller requested.
+            inst->device = pdpy->priv->requested_device;
+        }
+        else if (pdpy->priv->enable_alt_device)
+        {
+            // If PRIME is enabled, then pick an NVIDIA device.
+            EGLint num = 0;
+            if (!pdpy->platform->egl.QueryDevicesEXT(1, &inst->device, &num) || num <= 0)
+            {
+                inst->device = EGL_NO_DEVICE_EXT;
+            }
+        }
+
+        inst->supports_implicit_sync = EGL_TRUE;
+    }
+
+    if (inst->device == EGL_NO_DEVICE_EXT)
+    {
+        if (from_init)
+        {
+            eplSetError(pdpy->platform, EGL_BAD_ACCESS, "X server is not running on an NVIDIA device");
+        }
+        close(fd);
+        eplX11DisplayInstanceUnref(inst);
+        return NULL;
+    }
+
+    if (inst->device != serverDevice)
+    {
+        // If we're running on a different device than the server, then we need
+        // to open the correct device node for GBM.
+        const char *node;
+
+        close(fd);
+
+        node = pdpy->platform->egl.QueryDeviceStringEXT(inst->device, EGL_DRM_DEVICE_FILE_EXT);
+        if (node == NULL)
+        {
+            eplSetError(pdpy->platform, EGL_BAD_ACCESS, "Can't find device node.");
+            eplX11DisplayInstanceUnref(inst);
+            return NULL;
+        }
+
+        fd = open(node, O_RDWR);
+        if (fd < 0)
+        {
+            eplSetError(pdpy->platform, EGL_BAD_ACCESS, "Can't open device node %s", node);
+            eplX11DisplayInstanceUnref(inst);
+            return NULL;
+        }
+
+        inst->force_prime = EGL_TRUE;
+    }
+
     inst->gbmdev = gbm_create_device(fd);
     if (inst->gbmdev == NULL)
     {
@@ -776,26 +1005,13 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
     gbmName = gbm_device_get_backend_name(inst->gbmdev);
     if (gbmName == NULL || strcmp(gbmName, "nvidia") != 0)
     {
-        if (from_init)
-        {
-            eplSetError(pdpy->platform, EGL_BAD_ACCESS, "X server is not running on an NVIDIA device");
-        }
+        // This should never happen.
+        eplSetError(pdpy->platform, EGL_BAD_ACCESS, "Internal error: GBM device is not an NVIDIA device");
         eplX11DisplayInstanceUnref(inst);
         return NULL;
     }
 
-    inst->device = FindDeviceForFD(pdpy->platform, fd);
-    if (inst->device == EGL_NO_DEVICE_EXT)
-    {
-        if (from_init)
-        {
-            eplSetError(pdpy->platform, EGL_BAD_ACCESS, "Can't find matching EGLDevice");
-        }
-        eplX11DisplayInstanceUnref(inst);
-        return NULL;
-    }
-
-    internalDpy = MakeInternalDisplay(pdpy->platform, inst->device, fd);
+    internalDpy = eplGetDeviceInternalDisplay(pdpy->platform, inst->device);
     if (internalDpy == NULL)
     {
         eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Can't create internal EGLDisplay");
@@ -809,6 +1025,30 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
     }
     inst->internal_display = eplInternalDisplayRef(internalDpy);
 
+    if (pdpy->platform->priv->egl.PlatformCopyColorBufferNVX != NULL
+            && pdpy->platform->priv->egl.PlatformAllocColorBufferNVX != NULL
+            && pdpy->platform->priv->egl.PlatformExportColorBufferNVX != NULL
+            && pdpy->platform->priv->egl.CreateSync != NULL
+            && pdpy->platform->priv->egl.DestroySync != NULL
+            && pdpy->platform->priv->egl.WaitSync != NULL
+            && pdpy->platform->priv->egl.DupNativeFenceFDANDROID != NULL)
+    {
+        const char *extensions = pdpy->platform->egl.QueryString(internalDpy->edpy, EGL_EXTENSIONS);
+
+        // NV -> NV offloading doesn't currently work, because with our
+        // driver, the X server can't use a pitch linear buffer as a
+        // pixmap.
+        if (serverDevice == EGL_NO_DEVICE_EXT)
+        {
+            inst->supports_prime = EGL_TRUE;
+        }
+
+        if (eplFindExtension("EGL_ANDROID_native_fence_sync", extensions))
+        {
+            inst->supports_EGL_ANDROID_native_fence_sync = EGL_TRUE;
+        }
+    }
+
     if (!eplX11InitDriverFormats(pdpy->platform, inst))
     {
         // This should never happen. If it does, then we've got a problem in
@@ -818,7 +1058,49 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
         return NULL;
     }
 
-    if (!CheckServerFormatSupport(inst))
+    if (!CheckServerFormatSupport(inst, &supportsDirect, &supportsLinear))
+    {
+        eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Can't get a format modifier list from the X server");
+        eplX11DisplayInstanceUnref(inst);
+        return NULL;
+    }
+    if (!supportsLinear)
+    {
+        // If the server doesn't support pitch linear buffers, then we can't
+        // use PRIME.
+        inst->supports_prime = EGL_FALSE;
+    }
+
+    if (!supportsDirect)
+    {
+        // Note that this generally shouldn't happen unless we're using a
+        // different device than the server. In any case, if the client and
+        // server don't have any common format modifiers, then we'll have to
+        // go through the PRIME path.
+        inst->force_prime = EGL_TRUE;
+    }
+
+    if (!inst->supports_EGL_ANDROID_native_fence_sync)
+    {
+        // We need EGL_ANDROID_native_fence_sync to get a sync FD to plug in to
+        // a timeline object. Likewise, implicit sync requires a sync FD to
+        // attach to a dma-buf.
+        inst->supports_explicit_sync = EGL_FALSE;
+        inst->supports_implicit_sync = EGL_FALSE;
+    }
+
+    if (inst->supports_explicit_sync)
+    {
+        // Check if the DRM device supports timeline objects.
+        uint64_t cap = 0;
+        if (pdpy->platform->priv->drm.GetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) != 0
+                || cap == 0)
+        {
+            inst->supports_explicit_sync = EGL_FALSE;
+        }
+    }
+
+    if (inst->force_prime && !inst->supports_prime)
     {
         if (from_init)
         {
@@ -828,8 +1110,7 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
         return NULL;
     }
 
-    // TODO: Check supported formats and modifiers, and build the EGLConfig
-    // list.
+    // TODO: Build the EGLConfig list
 
     return inst;
 }

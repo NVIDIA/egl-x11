@@ -224,6 +224,45 @@ typedef struct
     EGLDeviceEXT device;
 
     /**
+     * If true, then always use of the indirect presentation path for PRIME.
+     */
+    EGLBoolean force_prime;
+
+    /**
+     * If true, then we can support the PRIME presentation path.
+     *
+     * Note that this isn't necessarily the same as
+     * \c EplImplDisplay::enable_alt_device. The \c supports_prime flag means that
+     * we can use the PRIME presentation path as needed on a per-window basis,
+     * even if we're not doing cross-device presentation.
+     */
+    EGLBoolean supports_prime;
+
+    /**
+     * If true, then the driver supports EGL_ANDROID_native_fence_sync.
+     */
+    EGLBoolean supports_EGL_ANDROID_native_fence_sync;
+
+    /**
+     * If true, then the server supports implicit sync semantics.
+     */
+    EGLBoolean supports_implicit_sync;
+
+    /**
+     * If true, then we can use the new PresentPixmapSynced request for
+     * synchronization on windows that support it.
+     *
+     * This means that we have the necessary EGL functions from the driver,
+     * the necessary functions in libxcb and libdrm, and that the server
+     * supports the necessary versions of the DRI3 and Present extensions.
+     *
+     * This does not account for the capabilities returned by the
+     * PresentQueryCapabilties request. That's checked separately for each
+     * window.
+     */
+    EGLBoolean supports_explicit_sync;
+
+    /**
      * The list of EGLConfigs.
      */
     EplConfigList *configs;
@@ -251,6 +290,40 @@ struct _EplImplDisplay
      * eglGetPlatformDisplay attribute list, or -1 if the app didn't specify.
      */
     int screen_attrib;
+
+    /**
+     * The EGLDeviceEXT handle that was specified with an EGL_DEVICE_EXT
+     * attribute.
+     */
+    EGLDeviceEXT device_attrib;
+
+    /**
+     * The EGLDeviceEXT handle that we should use for rendering, or
+     * EGL_NO_DEVICE_EXT to pick one during eglInitialize.
+     *
+     * This is set based on either the EGL_DEVICE_EXT attribute or based on
+     * environment variables.
+     */
+    EGLDeviceEXT requested_device;
+
+    /**
+     * If true, allow picking a different GPU to do rendering.
+     *
+     * This is set based on the __NV_PRIME_RENDER_OFFLOAD environment variable.
+     *
+     * If the normal device (\c requested_device if it's set, the server's
+     * device otherwise) isn't usable, then the \c enable_alt_device flag tells
+     * eplX11DisplayInstanceCreate to pick a different device rather than just
+     * fail.
+     *
+     * Note that this flag doesn't mean that we will use the PRIME presentation
+     * path. It's possible that we'd pick the same device as the server anyway.
+     *
+     * Likewise, if the application passed an EGL_DISPLAY_EXT attribute, then
+     * we might end up doing cross-device presentation even if the user doesn't
+     * set __NV_PRIME_RENDER_OFFLOAD.
+     */
+    EGLBoolean enable_alt_device;
 
     /**
      * A pointer to the X11DisplayInstance struct, or NULL if this display isn't initialized.
