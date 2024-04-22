@@ -38,6 +38,7 @@ x11_common_source = [
   'x11-config.c',
   'x11-window.c',
   'x11-pixmap.c',
+  'x11-timeline.c',
 ]
 
 if get_option('xcb')
