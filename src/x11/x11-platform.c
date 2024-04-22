@@ -70,6 +70,7 @@ static const EplHookFunc X11_HOOK_FUNCTIONS[] =
 {
     { "eglChooseConfig", eplX11HookChooseConfig },
     { "eglGetConfigAttrib", eplX11HookGetConfigAttrib },
+    { "eglSwapInterval", eplX11SwapInterval },
 };
 static const int NUM_X11_HOOK_FUNCTIONS = sizeof(X11_HOOK_FUNCTIONS) / sizeof(X11_HOOK_FUNCTIONS[0]);
 
@@ -1195,7 +1196,11 @@ static void eplX11TerminateDisplay(EplPlatformData *plat, EplDisplay *pdpy)
 
 static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf)
 {
-    if (surf->type == EPL_SURFACE_TYPE_PIXMAP)
+    if (surf->type == EPL_SURFACE_TYPE_WINDOW)
+    {
+        eplX11DestroyWindow(surf);
+    }
+    else if (surf->type == EPL_SURFACE_TYPE_PIXMAP)
     {
         eplX11DestroyPixmap(surf);
     }
@@ -1207,7 +1212,23 @@ static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf)
 
 static void eplX11FreeSurface(EplDisplay *pdpy, EplSurface *surf)
 {
-    // Nothing to do yet.
+    if (surf->type == EPL_SURFACE_TYPE_WINDOW)
+    {
+        eplX11FreeWindow(surf);
+    }
+}
+
+static EGLBoolean eplX11WaitGL(EplDisplay *pdpy, EplSurface *psurf)
+{
+    EGLBoolean ret = EGL_TRUE;
+
+    pdpy->platform->priv->egl.Finish();
+    if (psurf != NULL && psurf->type == EPL_SURFACE_TYPE_WINDOW)
+    {
+        ret = eplX11WaitGLWindow(pdpy, psurf);
+    }
+
+    return ret;
 }
 
 const EplImplFuncs X11_IMPL_FUNCS =
@@ -1225,4 +1246,5 @@ const EplImplFuncs X11_IMPL_FUNCS =
     .DestroySurface = eplX11DestroySurface,
     .FreeSurface = eplX11FreeSurface,
     .SwapBuffers = eplX11SwapBuffers,
+    .WaitGL = eplX11WaitGL,
 };

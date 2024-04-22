@@ -334,6 +334,14 @@ struct _EplImplDisplay
      * A callback to keep track of whether the native display has been closed.
      */
     X11XlibDisplayClosedData *closed_callback;
+
+    /**
+     * True if the kernel does *not* support DMA_BUF_IOCTL_IMPORT_SYNC_FILE.
+     *
+     * This is set the first time we try to use that ioctl, so that we don't
+     * have to waste time trying again.
+     */
+    EGLBoolean unsupported_import_sync_file;
 };
 
 EPL_REFCOUNT_DECLARE_TYPE_FUNCS(X11DisplayInstance, eplX11DisplayInstance);
@@ -405,5 +413,13 @@ EGLBoolean eplX11HookGetConfigAttrib(EGLDisplay edpy, EGLConfig config,
         EGLint attribute, EGLint *value);
 
 void eplX11DestroyPixmap(EplSurface *surf);
+
+EGLBoolean eplX11SwapInterval(EGLDisplay edpy, EGLint interval);
+
+void eplX11DestroyWindow(EplSurface *surf);
+
+void eplX11FreeWindow(EplSurface *surf);
+
+EGLBoolean eplX11WaitGLWindow(EplDisplay *pdpy, EplSurface *psurf);
 
 #endif // X11_PLATFORM_H
