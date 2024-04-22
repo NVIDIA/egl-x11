@@ -66,6 +66,13 @@ EPL_REFCOUNT_DEFINE_TYPE_FUNCS(X11DisplayInstance, eplX11DisplayInstance, refcou
 
 static void eplX11CleanupDisplay(EplDisplay *pdpy);
 
+static const EplHookFunc X11_HOOK_FUNCTIONS[] =
+{
+    { "eglChooseConfig", eplX11HookChooseConfig },
+    { "eglGetConfigAttrib", eplX11HookGetConfigAttrib },
+};
+static const int NUM_X11_HOOK_FUNCTIONS = sizeof(X11_HOOK_FUNCTIONS) / sizeof(X11_HOOK_FUNCTIONS[0]);
+
 static EGLBoolean LoadProcHelper(EplPlatformData *plat, void *handle, void **ptr, const char *name)
 {
     *ptr = dlsym(handle, name);
@@ -205,7 +212,7 @@ static const char *eplX11QueryString(EplPlatformData *plat, EplDisplay *pdpy, EG
 
 void *eplX11GetHookFunction(EplPlatformData *plat, const char *name)
 {
-    return NULL;
+    return eplFindHookFunction(X11_HOOK_FUNCTIONS, NUM_X11_HOOK_FUNCTIONS, name);
 }
 
 /**

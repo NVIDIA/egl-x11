@@ -398,4 +398,10 @@ X11DriverFormat *eplX11FindDriverFormat(X11DisplayInstance *inst, uint32_t fourc
 
 EGLBoolean eplX11InitConfigList(EplPlatformData *plat, X11DisplayInstance *inst);
 
+EGLBoolean eplX11HookChooseConfig(EGLDisplay edpy, EGLint const *attribs,
+        EGLConfig *configs, EGLint configSize, EGLint *numConfig);
+
+EGLBoolean eplX11HookGetConfigAttrib(EGLDisplay edpy, EGLConfig config,
+        EGLint attribute, EGLint *value);
+
 #endif // X11_PLATFORM_H

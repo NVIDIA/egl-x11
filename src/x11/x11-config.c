@@ -22,6 +22,11 @@
  */
 
 #include <stdlib.h>
+#include <unistd.h>
+#include <assert.h>
+
+#include <xcb/xcb.h>
+#include <xcb/dri3.h>
 
 #include "x11-platform.h"
 #include "config-list.h"
@@ -294,4 +299,192 @@ EGLBoolean eplX11InitConfigList(EplPlatformData *plat, X11DisplayInstance *inst)
         SetupConfig(plat, inst, &inst->configs->configs[i]);
     }
     return EGL_TRUE;
+}
+
+static EGLBoolean FilterNativePixmap(EplDisplay *pdpy, EplConfig **configs, EGLint *count, xcb_pixmap_t xpix)
+{
+    xcb_generic_error_t *error = NULL;
+    xcb_get_geometry_cookie_t geomCookie = xcb_get_geometry(pdpy->priv->inst->conn, xpix);
+    xcb_get_geometry_reply_t *geom = xcb_get_geometry_reply(pdpy->priv->inst->conn, geomCookie, &error);
+
+    xcb_dri3_buffers_from_pixmap_cookie_t buffersCookie;
+    xcb_dri3_buffers_from_pixmap_reply_t *buffers = NULL;
+    int32_t *fds = NULL;
+
+    EGLint match = 0;
+    EGLint i;
+
+    if (geom == NULL)
+    {
+        eplSetError(pdpy->platform, EGL_BAD_NATIVE_PIXMAP, "Invalid native pixmap 0x%x", xpix);
+        free(error);
+        return EGL_FALSE;
+    }
+
+    if (geom->root != pdpy->priv->inst->xscreen->root)
+    {
+        // TODO: Should this be an error, or should it just return zero matching configs?
+        eplSetError(pdpy->platform, EGL_BAD_NATIVE_PIXMAP, "Pixmap 0x%x is on a different screen", xpix);
+        free(geom);
+        return EGL_FALSE;
+    }
+
+    // Filter out any configs that have the wrong depth.
+    match = 0;
+    for (i=0; i < *count; i++)
+    {
+        EplConfig *config = configs[i];
+        const X11DriverFormat *fmt;
+
+        if (!(config->surfaceMask & EGL_PIXMAP_BIT))
+        {
+            continue;
+        }
+
+        assert(config->fourcc != DRM_FORMAT_INVALID);
+
+        fmt = eplX11FindDriverFormat(pdpy->priv->inst, config->fourcc);
+        if (fmt == NULL)
+        {
+            // If the driver doesn't support this format, then we should never
+            // have set EGL_PIXMAP_BIT on it.
+            assert(!"Can't happen -- no driver support for format");
+            continue;
+        }
+
+        if (eplFormatInfoDepth(fmt->fmt) != geom->depth)
+        {
+            continue;
+        }
+
+        configs[match++] = config;
+    }
+    free(geom);
+
+    *count = match;
+    if (match == 0)
+    {
+        return EGL_TRUE;
+    }
+
+    // To check the BPP and format modifiers, we have to use a
+    // DRI3BuffersFromPixmap request.
+
+    buffersCookie = xcb_dri3_buffers_from_pixmap(pdpy->priv->inst->conn, xpix);
+    buffers = xcb_dri3_buffers_from_pixmap_reply(pdpy->priv->inst->conn, buffersCookie, &error);
+    if (buffers == NULL)
+    {
+        eplSetError(pdpy->platform, EGL_BAD_NATIVE_PIXMAP, "Can't look up dma-buf for pixmap 0x%x\n", xpix);
+        free(error);
+        return EGL_FALSE;
+    }
+
+    // We don't need the file descriptors, so close them now before we do
+    // anything else.
+    fds = xcb_dri3_buffers_from_pixmap_buffers(buffers);
+    for (i=0; i<xcb_dri3_buffers_from_pixmap_buffers_length(buffers); i++)
+    {
+        close(fds[i]);
+    }
+
+    if (xcb_dri3_buffers_from_pixmap_buffers_length(buffers) != 1)
+    {
+        // We don't support pixmaps with more than one dma-buf.
+        *count = 0;
+        free(buffers);
+        return EGL_TRUE;
+    }
+
+    match = 0;
+    for (i=0; i<*count; i++)
+    {
+        EplConfig *config = configs[i];
+        const X11DriverFormat *fmt = eplX11FindDriverFormat(pdpy->priv->inst, config->fourcc);
+        EGLint j;
+        EGLBoolean supported = EGL_FALSE;
+
+        if (fmt->fmt->bpp != buffers->bpp)
+        {
+            continue;
+        }
+
+        for (j=0; j<fmt->num_modifiers; j++)
+        {
+            if (fmt->modifiers[j] == buffers->modifier)
+            {
+                supported = EGL_TRUE;
+                break;
+            }
+        }
+        if (!supported)
+        {
+            continue;
+        }
+
+        configs[match++] = config;
+    }
+    free(buffers);
+
+    return EGL_TRUE;
+}
+
+EGLBoolean eplX11HookChooseConfig(EGLDisplay edpy, EGLint const *attribs,
+        EGLConfig *configs, EGLint configSize, EGLint *numConfig)
+{
+    EplDisplay *pdpy;
+    EGLint matchNativePixmap = XCB_PIXMAP_NONE;
+    EGLBoolean success = EGL_FALSE;
+    EplConfig **found = NULL;
+    EGLint count = 0;
+
+    pdpy = eplDisplayAcquire(edpy);
+    if (pdpy == NULL)
+    {
+        return EGL_FALSE;
+    }
+
+    found = eplConfigListChooseConfigs(pdpy->platform, pdpy->internal_display,
+            pdpy->priv->inst->configs, attribs, &count, &matchNativePixmap);
+    if (found == NULL)
+    {
+        goto done;
+    }
+
+    if (matchNativePixmap != XCB_PIXMAP_NONE)
+    {
+        if (!FilterNativePixmap(pdpy, found, &count, matchNativePixmap))
+        {
+            goto done;
+        }
+    }
+
+    success = EGL_TRUE;
+
+done:
+    if (success)
+    {
+        eplConfigListReturnConfigs(found, count, configs, configSize, numConfig);
+    }
+    free(found);
+    eplDisplayRelease(pdpy);
+    return success;
+}
+
+EGLBoolean eplX11HookGetConfigAttrib(EGLDisplay edpy, EGLConfig config,
+        EGLint attribute, EGLint *value)
+{
+    EplDisplay *pdpy = eplDisplayAcquire(edpy);
+    EGLBoolean success = EGL_TRUE;
+
+    if (pdpy == NULL)
+    {
+        return EGL_FALSE;
+    }
+
+    success = eplConfigListGetAttribute(pdpy->platform, pdpy->internal_display,
+            pdpy->priv->inst->configs, config, attribute, value);
+
+    eplDisplayRelease(pdpy);
+
+    return success;
 }
