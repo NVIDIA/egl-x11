@@ -142,7 +142,11 @@ EplPlatformData *eplPlatformBaseAllocate(int major, int minor,
     platform->egl.QueryDisplayAttribEXT = driver->getProcAddress("eglQueryDisplayAttribEXT");
 
     // Optional functions.
-    platform->egl.SwapBuffersWithDamageEXT = driver->getProcAddress("eglSwapBuffersWithDamageEXT");
+    platform->egl.SwapBuffersWithDamage = driver->getProcAddress("eglSwapBuffersWithDamageKHR");
+    if (platform->egl.SwapBuffersWithDamage == NULL)
+    {
+        platform->egl.SwapBuffersWithDamage = driver->getProcAddress("eglSwapBuffersWithDamageEXT");
+    }
     platform->egl.CreateStreamProducerSurfaceKHR = driver->getProcAddress("CreateStreamProducerSurfaceKHR");
 
     if (platform->egl.QueryString == NULL
@@ -1027,7 +1031,7 @@ static EGLBoolean HookDestroySurface(EGLDisplay edpy, EGLSurface esurf)
     return ret;
 }
 
-static EGLBoolean HookSwapBuffersWithDamageEXT(EGLDisplay edpy, EGLSurface esurf, const EGLint *rects, EGLint n_rects)
+static EGLBoolean HookSwapBuffersWithDamage(EGLDisplay edpy, EGLSurface esurf, const EGLint *rects, EGLint n_rects)
 {
     EplDisplay *pdpy;
     EplSurface *psurf;
@@ -1072,16 +1076,16 @@ static EGLBoolean HookSwapBuffersWithDamageEXT(EGLDisplay edpy, EGLSurface esurf
         // If we don't recognize this EGLSurface, then it might be a pbuffer or
         // stream, so just pass it through to the driver.
         EGLDisplay internal = pdpy->internal_display;
-        PFNEGLSWAPBUFFERSWITHDAMAGEEXTPROC SwapBuffersWithDamageEXT = pdpy->platform->egl.SwapBuffersWithDamageEXT;
+        PFNEGLSWAPBUFFERSWITHDAMAGEKHRPROC SwapBuffersWithDamage = pdpy->platform->egl.SwapBuffersWithDamage;
         PFNEGLSWAPBUFFERSPROC SwapBuffers = pdpy->platform->egl.SwapBuffers;
 
         // Release the display before calling into the driver, so that we don't
         // sit on the lock for a (potentially long) SwapBuffers operation.
         eplDisplayRelease(pdpy);
 
-        if (SwapBuffersWithDamageEXT != NULL && rects != NULL && n_rects > 0)
+        if (SwapBuffersWithDamage != NULL && rects != NULL && n_rects > 0)
         {
-            ret = SwapBuffersWithDamageEXT(internal, esurf, rects, n_rects);
+            ret = SwapBuffersWithDamage(internal, esurf, rects, n_rects);
         }
         else
         {
@@ -1095,7 +1099,7 @@ static EGLBoolean HookSwapBuffersWithDamageEXT(EGLDisplay edpy, EGLSurface esurf
 
 static EGLBoolean HookSwapBuffers(EGLDisplay edpy, EGLSurface esurf)
 {
-    return HookSwapBuffersWithDamageEXT(edpy, esurf, NULL, 0);
+    return HookSwapBuffersWithDamage(edpy, esurf, NULL, 0);
 }
 
 static EGLBoolean HookWaitGL(void)
@@ -1169,7 +1173,8 @@ static const EplHookFunc BASE_HOOK_FUNCTIONS[] =
     { "eglDestroySurface", HookDestroySurface },
     { "eglInitialize", HookInitialize },
     { "eglSwapBuffers", HookSwapBuffers },
-    { "eglSwapBuffersWithDamageEXT", HookSwapBuffersWithDamageEXT },
+    { "eglSwapBuffersWithDamageEXT", HookSwapBuffersWithDamage },
+    { "eglSwapBuffersWithDamageKHR", HookSwapBuffersWithDamage },
     { "eglTerminate", HookTerminate },
 };
 static const size_t BASE_HOOK_FUNCTION_COUNT = sizeof(BASE_HOOK_FUNCTIONS) / sizeof(BASE_HOOK_FUNCTIONS[0]);
