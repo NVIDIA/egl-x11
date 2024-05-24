@@ -158,6 +158,7 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     xcb_generic_error_t *error = NULL;
     EGLSurface esurf = EGL_NO_SURFACE;
     EGLAttrib buffers[] = { GL_BACK, 0, EGL_NONE };
+    EGLAttrib *internalAttribs = NULL;
 
     if (create_platform)
     {
@@ -188,6 +189,12 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     }
     fmt = eplFormatInfoLookup(configInfo->fourcc);
     assert(fmt != NULL);
+
+    internalAttribs = eplX11GetInternalSurfaceAttribs(plat, pdpy, internalAttribs);
+    if (internalAttribs == NULL)
+    {
+        goto done;
+    }
 
     geomCookie = xcb_get_geometry(inst->conn, xpix);
     geomReply = xcb_get_geometry_reply(inst->conn, geomCookie, &error);
@@ -225,7 +232,7 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
 
     buffers[1] = (EGLAttrib) ppix->buffer;
     esurf = inst->platform->priv->egl.PlatformCreateSurfaceNVX(inst->internal_display->edpy, config,
-            buffers, attribs);
+            buffers, internalAttribs);
     if (esurf == EGL_NO_SURFACE)
     {
         eplSetError(plat, EGL_BAD_ALLOC, "Failed to allocate EGLSurface");
@@ -239,5 +246,6 @@ done:
     }
     free(geomReply);
     free(error);
+    free(internalAttribs);
     return esurf;
 }

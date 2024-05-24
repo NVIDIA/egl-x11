@@ -1231,6 +1231,38 @@ static EGLBoolean eplX11WaitGL(EplDisplay *pdpy, EplSurface *psurf)
     return ret;
 }
 
+EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat, EplDisplay *pdpy, const EGLAttrib *attribs)
+{
+    EGLAttrib *internalAttribs = NULL;
+    int count = 0;
+    int i;
+
+    if (attribs != NULL)
+    {
+        for (count = 0; attribs[count] != EGL_NONE; i += 2)
+        {
+            if (attribs[count] == EGL_SURFACE_Y_INVERTED_NVX)
+            {
+                eplSetError(plat, EGL_BAD_ATTRIBUTE, "Invalid attribute 0x%04x\n", attribs[count]);
+                return NULL;
+            }
+        }
+    }
+
+    internalAttribs = malloc((count + 3) * sizeof(EGLAttrib));
+    if (internalAttribs == NULL)
+    {
+        eplSetError(plat, EGL_BAD_ALLOC, "Out of memory\n");
+        return NULL;
+    }
+
+    memcpy(internalAttribs, attribs, count * sizeof(EGLAttrib));
+    internalAttribs[count] = EGL_SURFACE_Y_INVERTED_NVX;
+    internalAttribs[count + 1] = EGL_TRUE;
+    internalAttribs[count + 2] = EGL_NONE;
+    return internalAttribs;
+}
+
 const EplImplFuncs X11_IMPL_FUNCS =
 {
     .CleanupPlatform = eplX11CleanupPlatform,

@@ -1298,6 +1298,7 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     int numMods = 0;
     EGLBoolean prime = EGL_FALSE;
     EGLAttrib platformAttribs[15];
+    EGLAttrib *internalAttribs = NULL;
     uint32_t eventMask;
 
     if (create_platform)
@@ -1326,6 +1327,12 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     {
         eplSetError(plat, EGL_BAD_CONFIG, "EGLConfig %p does not support windows", config);
         return EGL_NO_SURFACE;
+    }
+
+    internalAttribs = eplX11GetInternalSurfaceAttribs(plat, pdpy, internalAttribs);
+    if (internalAttribs == NULL)
+    {
+        goto done;
     }
 
     fmt = eplX11FindDriverFormat(inst, configInfo->fourcc);
@@ -1461,7 +1468,7 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     platformAttribs[13] = (EGLAttrib) surf;
     platformAttribs[14] = EGL_NONE;
     esurf = inst->platform->priv->egl.PlatformCreateSurfaceNVX(inst->internal_display->edpy,
-            config, platformAttribs, attribs);
+            config, platformAttribs, internalAttribs);
 
 done:
     if (esurf == EGL_NO_SURFACE)
@@ -1473,6 +1480,7 @@ done:
     free(presentCapsReply);
     free(error);
     free(mods);
+    free(internalAttribs);
     return esurf;
 }
 

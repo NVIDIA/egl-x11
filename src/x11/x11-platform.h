@@ -406,6 +406,23 @@ X11DriverFormat *eplX11FindDriverFormat(X11DisplayInstance *inst, uint32_t fourc
 
 EGLBoolean eplX11InitConfigList(EplPlatformData *plat, X11DisplayInstance *inst);
 
+/**
+ * Returns the list of EGL attributes (not the buffers/internal attributes)
+ * that should be passed to eglPlatformCreateSurfaceNVX.
+ *
+ * Currently, this just sets the EGL_WAYLAND_Y_INVERTED_WL flag to true, and
+ * passes any other attributes through.
+ *
+ * \param plat The platform data
+ * \param pdpy The display data
+ * \param attribs The attribute list that was passed to eglCreateWindowSurface
+ *      or eglCreatePixmapSurface.
+ * \return The EGLAttrib array to pass to the driver, or NULL on error. The
+ *      caller must free the array using free().
+ */
+
+EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat, EplDisplay *pdpy, const EGLAttrib *attribs);
+
 EGLBoolean eplX11HookChooseConfig(EGLDisplay edpy, EGLint const *attribs,
         EGLConfig *configs, EGLint configSize, EGLint *numConfig);
 
