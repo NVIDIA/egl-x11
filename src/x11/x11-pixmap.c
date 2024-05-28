@@ -54,6 +54,7 @@ typedef struct
     xcb_pixmap_t xpix;
     EGLPlatformColorBufferNVX buffer;
     EGLPlatformColorBufferNVX blit_target;
+    int prime_dmabuf;
 } X11Pixmap;
 
 static EGLBoolean CheckModifierSupported(X11DisplayInstance *inst,
@@ -132,6 +133,7 @@ static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
     xcb_dri3_buffers_from_pixmap_reply_t *reply = NULL;
     int depth = fmt->colors[0] + fmt->colors[1] + fmt->colors[2] + fmt->colors[3];
     EGLPlatformColorBufferNVX serverBuffer = NULL;
+    int32_t *fds = NULL;
     EGLBoolean prime = EGL_FALSE;
     EGLBoolean success = EGL_FALSE;
 
@@ -148,6 +150,13 @@ static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
     if (reply == NULL)
     {
         free(error);
+        goto done;
+    }
+    fds = xcb_dri3_buffers_from_pixmap_buffers(reply);
+
+    if (xcb_dri3_buffers_from_pixmap_buffers_length(reply) <= 0)
+    {
+        eplSetError(inst->platform, EGL_BAD_MATCH, "Pixmap 0x%x reports zero planes\n", xpix);
         goto done;
     }
 
@@ -186,8 +195,7 @@ static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
     }
 
     serverBuffer = inst->platform->priv->egl.PlatformImportColorBufferNVX(inst->internal_display->edpy,
-            xcb_dri3_buffers_from_pixmap_buffers(reply)[0],
-            width, height, fmt->fourcc,
+            fds[0], width, height, fmt->fourcc,
             xcb_dri3_buffers_from_pixmap_strides(reply)[0],
             xcb_dri3_buffers_from_pixmap_offsets(reply)[0],
             reply->modifier);
@@ -206,6 +214,7 @@ static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
         }
 
         ppix->blit_target = serverBuffer;
+        ppix->prime_dmabuf = fds[0];
     }
     else
     {
@@ -217,22 +226,49 @@ static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
 done:
     if (reply != NULL)
     {
-        int32_t *fds = xcb_dri3_buffers_from_pixmap_buffers(reply);
         int i;
         for (i=0; i<xcb_dri3_buffers_from_pixmap_buffers_length(reply); i++)
         {
-            close(fds[i]);
+            if (fds[i] != ppix->prime_dmabuf)
+            {
+                close(fds[i]);
+            }
         }
         free(reply);
     }
-    if (!success)
+    return success;
+}
+
+static void PixmapDamageCallback(void *param, int syncfd, unsigned int flags)
+{
+    EplSurface *surf = param;
+    X11Pixmap *ppix = (X11Pixmap *) surf->priv;
+
+    /*
+     * Note that we should be fine even if another thread is trying to call
+     * eglDestroyPixmap here.
+     *
+     * The driver's eglDestroyPixmap gets called before anything else in the
+     * X11Pixmap struct gets cleaned up. The driver will ensure that any
+     * callbacks have finished and no new callbacks can start when
+     * eglDestroyPixmap returns.
+     */
+
+    if (syncfd >= 0)
     {
-        if (serverBuffer != NULL)
+        /*
+         * We don't have any form of explicit sync that we can use for pixmap
+         * rendering, because we're not using PresentPixmap.
+         *
+         * If the server (and the kernel) both support it, then try to use
+         * implicit sync. Otherwise, do a CPU wait so that we can at least get
+         * a consistent functional result in all cases.
+         */
+        if (ppix->prime_dmabuf < 0 || !eplX11ImportDmaBufSyncFile(ppix->inst, ppix->prime_dmabuf, syncfd))
         {
-            ppix->inst->platform->priv->egl.PlatformFreeColorBufferNVX(ppix->inst->internal_display->edpy, serverBuffer);
+            eplX11WaitForFD(syncfd);
         }
     }
-    return success;
 }
 
 void eplX11DestroyPixmap(EplSurface *surf)
@@ -257,6 +293,10 @@ void eplX11DestroyPixmap(EplSurface *surf)
             }
             eplX11DisplayInstanceUnref(ppix->inst);
         }
+        if (ppix->prime_dmabuf >= 0)
+        {
+            close(ppix->prime_dmabuf);
+        }
         free(ppix);
     }
 }
@@ -277,6 +317,8 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     {
         GL_BACK, 0,
         EGL_PLATFORM_SURFACE_BLIT_TARGET_NVX, 0,
+        EGL_PLATFORM_SURFACE_DAMAGE_CALLBACK_NVX, (EGLAttrib) PixmapDamageCallback,
+        EGL_PLATFORM_SURFACE_DAMAGE_CALLBACK_PARAM_NVX, (EGLAttrib) surf,
         EGL_NONE
     };
     EGLAttrib *internalAttribs = NULL;
@@ -344,6 +386,7 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     surf->priv = (EplImplSurface *) ppix;
     ppix->inst = eplX11DisplayInstanceRef(inst);
     ppix->xpix = xpix;
+    ppix->prime_dmabuf = -1;
 
     if (!ImportPixmap(inst, surf, xpix, fmt, geomReply->width, geomReply->height))
     {
