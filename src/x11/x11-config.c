@@ -266,10 +266,9 @@ static void SetupConfig(EplPlatformData *plat, X11DisplayInstance *inst, EplConf
         return;
     }
 
-    if (!inst->force_prime)
-    {
-        config->surfaceMask |= EGL_PIXMAP_BIT;
-    }
+    // We should be able to support pixmaps with any supported format, as long
+    // as they have a supported modifier.
+    config->surfaceMask |= EGL_PIXMAP_BIT;
 
     visual = FindVisualForFormat(inst->platform, inst->conn, inst->xscreen, support->fmt);
     if (visual != 0)
@@ -395,12 +394,20 @@ static EGLBoolean FilterNativePixmap(EplDisplay *pdpy, EplConfig **configs, EGLi
         return EGL_TRUE;
     }
 
+    if (pdpy->priv->inst->force_prime && buffers->modifier != DRM_FORMAT_MOD_LINEAR)
+    {
+        // If we have to use the PRIME path, then we can only support a linear
+        // pixmap.
+        *count = 0;
+        free(buffers);
+        return EGL_TRUE;
+    }
+
     match = 0;
     for (i=0; i<*count; i++)
     {
         EplConfig *config = configs[i];
         const X11DriverFormat *fmt = eplX11FindDriverFormat(pdpy->priv->inst, config->fourcc);
-        EGLint j;
         EGLBoolean supported = EGL_FALSE;
 
         if (fmt->fmt->bpp != buffers->bpp)
@@ -408,12 +415,21 @@ static EGLBoolean FilterNativePixmap(EplDisplay *pdpy, EplConfig **configs, EGLi
             continue;
         }
 
-        for (j=0; j<fmt->num_modifiers; j++)
+        if (buffers->modifier == DRM_FORMAT_MOD_LINEAR)
         {
-            if (fmt->modifiers[j] == buffers->modifier)
+            // We can always support a linear pixmap by blitting to it.
+            supported = EGL_TRUE;
+        }
+        else
+        {
+            EGLint j;
+            for (j=0; j<fmt->num_modifiers; j++)
             {
-                supported = EGL_TRUE;
-                break;
+                if (fmt->modifiers[j] == buffers->modifier)
+                {
+                    supported = EGL_TRUE;
+                    break;
+                }
             }
         }
         if (!supported)
