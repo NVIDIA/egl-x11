@@ -53,20 +53,95 @@ typedef struct
     X11DisplayInstance *inst;
     xcb_pixmap_t xpix;
     EGLPlatformColorBufferNVX buffer;
+    EGLPlatformColorBufferNVX blit_target;
 } X11Pixmap;
+
+static EGLBoolean CheckModifierSupported(X11DisplayInstance *inst,
+        const X11DriverFormat *fmt, uint64_t modifier)
+{
+    if (fmt != NULL)
+    {
+        int i;
+        for (i=0; i<fmt->num_modifiers; i++)
+        {
+            if (fmt->modifiers[i] == modifier)
+            {
+                return EGL_TRUE;
+            }
+        }
+    }
+    return EGL_FALSE;
+}
+
+static EGLPlatformColorBufferNVX AllocInternalBuffer(X11DisplayInstance *inst,
+        const X11DriverFormat *fmt, uint32_t width, uint32_t height)
+{
+    EGLPlatformColorBufferNVX buffer = NULL;
+    struct gbm_bo *gbo = NULL;
+    int fd = -1;
+
+    gbo = gbm_bo_create_with_modifiers2(inst->gbmdev,
+            width, height, fmt->fourcc, fmt->modifiers, fmt->num_modifiers, 0);
+    if (gbo == NULL)
+    {
+        eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to allocate internal buffer for PRIME pixmap");
+        goto done;
+    }
+
+    fd = gbm_bo_get_fd(gbo);
+    if (fd < 0)
+    {
+        eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to get internal dma-buf for PRIME pixmap");
+        goto done;
+    }
+
+    buffer = inst->platform->priv->egl.PlatformImportColorBufferNVX(inst->internal_display->edpy,
+            fd, width, height, gbm_bo_get_format(gbo),
+            gbm_bo_get_stride(gbo),
+            gbm_bo_get_offset(gbo, 0),
+            gbm_bo_get_modifier(gbo));
+    if (buffer == NULL)
+    {
+        eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to import internal dma-buf for PRIME pixmap");
+        goto done;
+    }
+
+done:
+    if (fd >= 0)
+    {
+        close(fd);
+    }
+    if (gbo != NULL)
+    {
+        gbm_bo_destroy(gbo);
+    }
+    return buffer;
+}
 
 /**
  * Fetches the dma-buf for a Pixmap from the server and creates an
  * EGLExtColorBuffer in the driver for it.
  */
-static EGLPlatformColorBufferNVX ImportPixmap(X11DisplayInstance *inst, xcb_pixmap_t xpix,
-        const EplFormatInfo *fmt, uint32_t width, uint32_t height)
+static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
+        xcb_pixmap_t xpix, const EplFormatInfo *fmt, uint32_t width, uint32_t height)
 {
+    X11Pixmap *ppix = (X11Pixmap *) surf->priv;
+    const X11DriverFormat *driverFmt = eplX11FindDriverFormat(inst, fmt->fourcc);
     xcb_generic_error_t *error = NULL;
     xcb_dri3_buffers_from_pixmap_cookie_t cookie;
     xcb_dri3_buffers_from_pixmap_reply_t *reply = NULL;
-    EGLPlatformColorBufferNVX buffer = NULL;
     int depth = fmt->colors[0] + fmt->colors[1] + fmt->colors[2] + fmt->colors[3];
+    EGLPlatformColorBufferNVX serverBuffer = NULL;
+    EGLBoolean prime = EGL_FALSE;
+    EGLBoolean success = EGL_FALSE;
+
+    if (driverFmt == NULL)
+    {
+        // This should never happen: If the format isn't supported, then we
+        // should have caught that when we looked up the EGLConfig.
+        eplSetError(inst->platform, EGL_BAD_ALLOC, "Internal error: Unsupported format 0x%08x\n", fmt->fourcc);
+        goto done;
+    }
 
     cookie = xcb_dri3_buffers_from_pixmap(inst->conn, xpix);
     reply = xcb_dri3_buffers_from_pixmap_reply(inst->conn, cookie, &error);
@@ -78,6 +153,9 @@ static EGLPlatformColorBufferNVX ImportPixmap(X11DisplayInstance *inst, xcb_pixm
 
     if (xcb_dri3_buffers_from_pixmap_buffers_length(reply) != 1)
     {
+        eplSetError(inst->platform, EGL_BAD_MATCH,
+                "Pixmap 0x%x has %d planes, but multi-plane buffers are not supported\n",
+                xpix, xcb_dri3_buffers_from_pixmap_buffers_length(reply));
         goto done;
     }
 
@@ -96,17 +174,45 @@ static EGLPlatformColorBufferNVX ImportPixmap(X11DisplayInstance *inst, xcb_pixm
         goto done;
     }
 
-    buffer = inst->platform->priv->egl.PlatformImportColorBufferNVX(inst->internal_display->edpy,
+    if (inst->force_prime || !CheckModifierSupported(inst, driverFmt, reply->modifier))
+    {
+        prime = EGL_TRUE;
+    }
+    if (prime && reply->modifier != DRM_FORMAT_MOD_LINEAR)
+    {
+        eplSetError(inst->platform, EGL_BAD_MATCH, "Pixmap 0x%x has unsupported modifier 0x%llx\n",
+                xpix, (unsigned long long) reply->modifier);
+        goto done;
+    }
+
+    serverBuffer = inst->platform->priv->egl.PlatformImportColorBufferNVX(inst->internal_display->edpy,
             xcb_dri3_buffers_from_pixmap_buffers(reply)[0],
             width, height, fmt->fourcc,
             xcb_dri3_buffers_from_pixmap_strides(reply)[0],
             xcb_dri3_buffers_from_pixmap_offsets(reply)[0],
             reply->modifier);
-    if (buffer == NULL)
+    if (serverBuffer == NULL)
     {
         eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to import dma-buf for pixmap");
         goto done;
     }
+
+    if (prime)
+    {
+        ppix->buffer = AllocInternalBuffer(inst, driverFmt, width, height);
+        if (ppix->buffer == NULL)
+        {
+            goto done;
+        }
+
+        ppix->blit_target = serverBuffer;
+    }
+    else
+    {
+        ppix->buffer = serverBuffer;
+    }
+
+    success = EGL_TRUE;
 
 done:
     if (reply != NULL)
@@ -119,7 +225,14 @@ done:
         }
         free(reply);
     }
-    return buffer;
+    if (!success)
+    {
+        if (serverBuffer != NULL)
+        {
+            ppix->inst->platform->priv->egl.PlatformFreeColorBufferNVX(ppix->inst->internal_display->edpy, serverBuffer);
+        }
+    }
+    return success;
 }
 
 void eplX11DestroyPixmap(EplSurface *surf)
@@ -134,10 +247,13 @@ void eplX11DestroyPixmap(EplSurface *surf)
             {
                 ppix->inst->platform->egl.DestroySurface(ppix->inst->internal_display->edpy, surf->internal_surface);
             }
-            if (ppix->buffer != NULL && !ppix->inst->platform->destroyed)
+            if (ppix->buffer != NULL)
             {
                 ppix->inst->platform->priv->egl.PlatformFreeColorBufferNVX(ppix->inst->internal_display->edpy, ppix->buffer);
-                ppix->buffer = NULL;
+            }
+            if (ppix->blit_target != NULL)
+            {
+                ppix->inst->platform->priv->egl.PlatformFreeColorBufferNVX(ppix->inst->internal_display->edpy, ppix->blit_target);
             }
             eplX11DisplayInstanceUnref(ppix->inst);
         }
@@ -157,7 +273,12 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     xcb_get_geometry_reply_t *geomReply = NULL;
     xcb_generic_error_t *error = NULL;
     EGLSurface esurf = EGL_NO_SURFACE;
-    EGLAttrib buffers[] = { GL_BACK, 0, EGL_NONE };
+    EGLAttrib buffers[] =
+    {
+        GL_BACK, 0,
+        EGL_PLATFORM_SURFACE_BLIT_TARGET_NVX, 0,
+        EGL_NONE
+    };
     EGLAttrib *internalAttribs = NULL;
 
     if (create_platform)
@@ -224,13 +345,13 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     ppix->inst = eplX11DisplayInstanceRef(inst);
     ppix->xpix = xpix;
 
-    ppix->buffer = ImportPixmap(inst, xpix, fmt, geomReply->width, geomReply->height);
-    if (ppix->buffer == NULL)
+    if (!ImportPixmap(inst, surf, xpix, fmt, geomReply->width, geomReply->height))
     {
         goto done;
     }
 
     buffers[1] = (EGLAttrib) ppix->buffer;
+    buffers[3] = (EGLAttrib) ppix->blit_target;
     esurf = inst->platform->priv->egl.PlatformCreateSurfaceNVX(inst->internal_display->edpy, config,
             buffers, internalAttribs);
     if (esurf == EGL_NO_SURFACE)
