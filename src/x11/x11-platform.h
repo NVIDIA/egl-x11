@@ -334,14 +334,6 @@ struct _EplImplDisplay
      * A callback to keep track of whether the native display has been closed.
      */
     X11XlibDisplayClosedData *closed_callback;
-
-    /**
-     * True if the kernel does *not* support DMA_BUF_IOCTL_IMPORT_SYNC_FILE.
-     *
-     * This is set the first time we try to use that ioctl, so that we don't
-     * have to waste time trying again.
-     */
-    EGLBoolean unsupported_import_sync_file;
 };
 
 EPL_REFCOUNT_DECLARE_TYPE_FUNCS(X11DisplayInstance, eplX11DisplayInstance);
@@ -438,5 +430,14 @@ void eplX11DestroyWindow(EplSurface *surf);
 void eplX11FreeWindow(EplSurface *surf);
 
 EGLBoolean eplX11WaitGLWindow(EplDisplay *pdpy, EplSurface *psurf);
+
+/**
+ * A wrapper around the DMA_BUF_IOCTL_IMPORT_SYNC_FILE ioctl.
+ *
+ * This will check whether implicit sync is supporte, and if so, it will
+ * plug a syncfd into a dma-buf.
+ */
+EGLBoolean eplX11ImportDmaBufSyncFile(X11DisplayInstance *inst, int dmabuf, int syncfd);
+int eplX11ExportDmaBufSyncFile(X11DisplayInstance *inst, int dmabuf);
 
 #endif // X11_PLATFORM_H

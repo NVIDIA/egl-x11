@@ -1667,21 +1667,8 @@ static EGLBoolean SyncRendering(EplDisplay *pdpy, EplSurface *surf, X11ColorBuff
             eplSetError(pwin->inst->platform, EGL_BAD_ALLOC, "Failed to attach timeline point");
         }
     }
-    else if (pwin->inst->supports_implicit_sync && !pdpy->priv->unsupported_import_sync_file)
+    else if (eplX11ImportDmaBufSyncFile(pwin->inst, buffer->fd, syncFd))
     {
-        struct dma_buf_import_sync_file params = {};
-
-        params.flags = DMA_BUF_SYNC_WRITE;
-        params.fd = syncFd;
-        if (drmIoctl(buffer->fd, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &params) != 0)
-        {
-            if (errno == ENOTTY || errno == EBADF || errno == ENOSYS)
-            {
-                pdpy->priv->unsupported_import_sync_file = EGL_TRUE;
-            }
-
-            pwin->inst->platform->priv->egl.Finish();
-        }
         success = EGL_TRUE;
     }
     else
@@ -1736,30 +1723,15 @@ static EGLBoolean WaitForSyncFDGPU(X11DisplayInstance *inst, int syncfd)
 static EGLBoolean WaitImplicitFence(EplDisplay *pdpy, X11ColorBuffer *buffer)
 {
     EGLBoolean success = EGL_FALSE;
+    int fd = -1;
 
     assert(pdpy->priv->inst->supports_implicit_sync);
 
-    if (!pdpy->priv->unsupported_import_sync_file)
+    fd = eplX11ExportDmaBufSyncFile(pdpy->priv->inst, buffer->fd);
+    if (fd >= 0)
     {
-        struct dma_buf_export_sync_file params = {};
-        params.flags = DMA_BUF_SYNC_WRITE;
-        params.fd = -1;
-
-        if (drmIoctl(buffer->fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &params) == 0)
-        {
-            if (params.fd >= 0)
-            {
-                success = WaitForSyncFDGPU(pdpy->priv->inst, params.fd);
-                close(params.fd);
-            }
-        }
-        else
-        {
-            if (errno == ENOTTY || errno == EBADF || errno == ENOSYS)
-            {
-                pdpy->priv->unsupported_import_sync_file = EGL_TRUE;
-            }
-        }
+        success = WaitForSyncFDGPU(pdpy->priv->inst, fd);
+        close(fd);
     }
 
     if (success)

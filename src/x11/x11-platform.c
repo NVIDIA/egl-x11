@@ -45,6 +45,7 @@
 #include <xcb/present.h>
 
 #include "platform-utils.h"
+#include "dma-buf.h"
 
 static const char *FORCE_ENABLE_ENV = "__NV_FORCE_ENABLE_X11_EGL_PLATFORM";
 
@@ -73,6 +74,16 @@ static const EplHookFunc X11_HOOK_FUNCTIONS[] =
     { "eglSwapInterval", eplX11SwapInterval },
 };
 static const int NUM_X11_HOOK_FUNCTIONS = sizeof(X11_HOOK_FUNCTIONS) / sizeof(X11_HOOK_FUNCTIONS[0]);
+
+/**
+ * True if the kernel might support DMA_BUF_IOCTL_IMPORT_SYNC_FILE and
+ * DMA_BUF_IOCTL_EXPORT_SYNC_FILE.
+ *
+ * There's no direct way to query that support, so instead, if an ioctl fails,
+ * then we set this flag to false so that we don't waste time trying again.
+ */
+static EGLBoolean import_sync_file_supported = EGL_TRUE;
+static pthread_mutex_t import_sync_file_supported_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static EGLBoolean LoadProcHelper(EplPlatformData *plat, void *handle, void **ptr, const char *name)
 {
@@ -1261,6 +1272,68 @@ EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat, EplDisplay *pd
     internalAttribs[count + 1] = EGL_TRUE;
     internalAttribs[count + 2] = EGL_NONE;
     return internalAttribs;
+}
+
+static EGLBoolean eplX11CheckImportSyncFileSupported(void)
+{
+    EGLBoolean ret;
+    pthread_mutex_lock(&import_sync_file_supported_mutex);
+    ret = import_sync_file_supported;
+    pthread_mutex_unlock(&import_sync_file_supported_mutex);
+    return ret;
+}
+
+static void eplX11SetImportSyncFileUnsupported(void)
+{
+    pthread_mutex_lock(&import_sync_file_supported_mutex);
+    import_sync_file_supported = EGL_FALSE;
+    pthread_mutex_unlock(&import_sync_file_supported_mutex);
+}
+
+EGLBoolean eplX11ImportDmaBufSyncFile(X11DisplayInstance *inst, int dmabuf, int syncfd)
+{
+    EGLBoolean ret = EGL_FALSE;
+
+    if (inst->supports_implicit_sync && eplX11CheckImportSyncFileSupported())
+    {
+        struct dma_buf_import_sync_file params = {};
+
+        params.flags = DMA_BUF_SYNC_WRITE;
+        params.fd = syncfd;
+        if (drmIoctl(dmabuf, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &params) == 0)
+        {
+            ret = EGL_TRUE;
+        }
+        else if (errno == ENOTTY || errno == EBADF || errno == ENOSYS)
+        {
+            eplX11SetImportSyncFileUnsupported();
+        }
+    }
+
+    return ret;
+}
+
+int eplX11ExportDmaBufSyncFile(X11DisplayInstance *inst, int dmabuf)
+{
+    int fd = -1;
+
+    if (inst->supports_implicit_sync && eplX11CheckImportSyncFileSupported())
+    {
+        struct dma_buf_export_sync_file params = {};
+        params.flags = DMA_BUF_SYNC_WRITE;
+        params.fd = -1;
+
+        if (drmIoctl(dmabuf, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &params) == 0)
+        {
+            fd = params.fd;
+        }
+        else if (errno == ENOTTY || errno == EBADF || errno == ENOSYS)
+        {
+            eplX11SetImportSyncFileUnsupported();
+        }
+    }
+
+    return fd;
 }
 
 const EplImplFuncs X11_IMPL_FUNCS =
