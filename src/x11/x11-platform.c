@@ -30,6 +30,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include <poll.h>
 #include <assert.h>
 
 #include <EGL/egl.h>
@@ -1334,6 +1335,32 @@ int eplX11ExportDmaBufSyncFile(X11DisplayInstance *inst, int dmabuf)
     }
 
     return fd;
+}
+
+EGLBoolean eplX11WaitForFD(int syncfd)
+{
+    struct pollfd pfd;
+
+    if (syncfd < 0)
+    {
+        return EGL_TRUE;
+    }
+
+    pfd.fd = syncfd;
+    pfd.events = POLLIN;
+
+    while (1)
+    {
+        int num = poll(&pfd, 1, -1);
+        if (num == 1)
+        {
+            return EGL_TRUE;
+        }
+        else if (num < 0 && errno != EINTR)
+        {
+            return EGL_FALSE;
+        }
+    }
 }
 
 const EplImplFuncs X11_IMPL_FUNCS =

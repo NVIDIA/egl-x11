@@ -440,4 +440,15 @@ EGLBoolean eplX11WaitGLWindow(EplDisplay *pdpy, EplSurface *psurf);
 EGLBoolean eplX11ImportDmaBufSyncFile(X11DisplayInstance *inst, int dmabuf, int syncfd);
 int eplX11ExportDmaBufSyncFile(X11DisplayInstance *inst, int dmabuf);
 
+/**
+ * Waits for a file descriptor to be ready using poll().
+ *
+ * Since this uses poll(), it can work with any arbitrary file descriptor
+ * (including a syncfd or a dma-buf), but it does so with a CPU stall.
+ *
+ * \param syncfd The file descriptor to wait on.
+ * \return EGL_TRUE on success, or EGL_FALSE on error.
+ */
+EGLBoolean eplX11WaitForFD(int syncfd);
+
 #endif // X11_PLATFORM_H

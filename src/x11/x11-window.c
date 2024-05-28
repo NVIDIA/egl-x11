@@ -1087,42 +1087,6 @@ static void SendPresentPixmap(EplSurface *surf, X11ColorBuffer *sharedPixmap, ui
 }
 
 /**
- * Waits for a file descriptor to be ready using poll().
- *
- * Since this uses poll(), it can work with any arbitrary FD (including a
- * syncfd or a dma-buf), but it does so with a CPU stall.
- *
- * See \c WaitForSyncFDGPU for a version that takes does a GPU wait instead.
- *
- * \param syncfd The file descriptor to wait on.
- */
-static EGLBoolean WaitForFD(int syncfd)
-{
-    struct pollfd pfd;
-
-    if (syncfd < 0)
-    {
-        return EGL_TRUE;
-    }
-
-    pfd.fd = syncfd;
-    pfd.events = POLLIN;
-
-    while (1)
-    {
-        int num = poll(&pfd, 1, -1);
-        if (num == 1)
-        {
-            return EGL_TRUE;
-        }
-        else if (num < 0 && errno != EINTR)
-        {
-            return EGL_FALSE;
-        }
-    }
-}
-
-/**
  * Allocates a shared Pixmap for a color buffer.
  */
 static EGLBoolean CreateSharedPixmap(EplSurface *psurf, X11ColorBuffer *buffer, const EplFormatInfo *fmt)
@@ -1242,7 +1206,7 @@ static void WindowDamageCallback(void *param, int syncfd, unsigned int flags)
             uint32_t handle;
             uint64_t point;
 
-            if (!WaitForFD(syncfd))
+            if (!eplX11WaitForFD(syncfd))
             {
                 goto done;
             }
@@ -1265,7 +1229,7 @@ static void WindowDamageCallback(void *param, int syncfd, unsigned int flags)
         // If we don't have explicit sync, then just do a CPU wait.
         // TODO: Is there a way that we can reliably use implicit sync if
         // the server supports it?
-        if (!WaitForFD(syncfd))
+        if (!eplX11WaitForFD(syncfd))
         {
             goto done;
         }
