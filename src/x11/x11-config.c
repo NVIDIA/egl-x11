@@ -394,35 +394,25 @@ static EGLBoolean FilterNativePixmap(EplDisplay *pdpy, EplConfig **configs, EGLi
         return EGL_TRUE;
     }
 
-    if (pdpy->priv->inst->force_prime && buffers->modifier != DRM_FORMAT_MOD_LINEAR)
-    {
-        // If we have to use the PRIME path, then we can only support a linear
-        // pixmap.
-        *count = 0;
-        free(buffers);
-        return EGL_TRUE;
-    }
-
     match = 0;
     for (i=0; i<*count; i++)
     {
         EplConfig *config = configs[i];
         const X11DriverFormat *fmt = eplX11FindDriverFormat(pdpy->priv->inst, config->fourcc);
-        EGLBoolean supported = EGL_FALSE;
 
         if (fmt->fmt->bpp != buffers->bpp)
         {
             continue;
         }
 
-        if (buffers->modifier == DRM_FORMAT_MOD_LINEAR)
-        {
-            // We can always support a linear pixmap by blitting to it.
-            supported = EGL_TRUE;
-        }
-        else
+        // With PRIME, we can support any pixmap in the server by allocating a
+        // linear pixmap and then sending a CopyArea request. Without PRIME,
+        // we're limited to whatever we can render to directly.
+        if (!pdpy->priv->inst->supports_prime)
         {
             EGLint j;
+            EGLBoolean supported = EGL_FALSE;
+
             for (j=0; j<fmt->num_modifiers; j++)
             {
                 if (fmt->modifiers[j] == buffers->modifier)
@@ -431,10 +421,11 @@ static EGLBoolean FilterNativePixmap(EplDisplay *pdpy, EplConfig **configs, EGLi
                     break;
                 }
             }
-        }
-        if (!supported)
-        {
-            continue;
+
+            if (!supported)
+            {
+                continue;
+            }
         }
 
         configs[match++] = config;

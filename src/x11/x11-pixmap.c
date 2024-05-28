@@ -28,6 +28,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <assert.h>
 
@@ -52,25 +54,32 @@ typedef struct
 {
     X11DisplayInstance *inst;
     xcb_pixmap_t xpix;
+    uint32_t width;
+    uint32_t height;
     EGLPlatformColorBufferNVX buffer;
     EGLPlatformColorBufferNVX blit_target;
     int prime_dmabuf;
+    xcb_pixmap_t prime_pixmap;
 } X11Pixmap;
 
-static EGLBoolean CheckModifierSupported(X11DisplayInstance *inst,
-        const X11DriverFormat *fmt, uint64_t modifier)
+static EGLBoolean CheckDirectSupported(X11DisplayInstance *inst, const X11DriverFormat *fmt,
+        const xcb_dri3_buffers_from_pixmap_reply_t *reply)
 {
-    if (fmt != NULL)
+    int i;
+
+    if (xcb_dri3_buffers_from_pixmap_buffers_length(reply) != 1)
     {
-        int i;
-        for (i=0; i<fmt->num_modifiers; i++)
+        return EGL_FALSE;
+    }
+
+    for (i=0; i<fmt->num_modifiers; i++)
+    {
+        if (fmt->modifiers[i] == reply->modifier)
         {
-            if (fmt->modifiers[i] == modifier)
-            {
-                return EGL_TRUE;
-            }
+            return EGL_TRUE;
         }
     }
+
     return EGL_FALSE;
 }
 
@@ -119,6 +128,74 @@ done:
     return buffer;
 }
 
+static EGLBoolean AllocLinearPixmap(X11DisplayInstance *inst, EplSurface *surf,
+        const X11DriverFormat *fmt, uint32_t width, uint32_t height)
+{
+    X11Pixmap *ppix = (X11Pixmap *) surf->priv;
+    int stride = 0;
+    int offset = 0;
+    int fd = -1;
+    xcb_void_cookie_t cookie;
+    xcb_generic_error_t *error = NULL;
+    EGLBoolean success = EGL_FALSE;
+
+    assert(ppix->prime_dmabuf < 0);
+    assert(ppix->blit_target == NULL);
+
+    ppix->blit_target = inst->platform->priv->egl.PlatformAllocColorBufferNVX(inst->internal_display->edpy,
+                width, height, fmt->fourcc, DRM_FORMAT_MOD_LINEAR, EGL_TRUE);
+    if (ppix->blit_target == NULL)
+    {
+        eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to allocate internal buffer for linear PRIME pixmap");
+        goto done;
+    }
+
+    // Export the image to a dma-buf.
+    if (!inst->platform->priv->egl.PlatformExportColorBufferNVX(inst->internal_display->edpy, ppix->blit_target,
+        &ppix->prime_dmabuf, NULL, NULL, NULL, &stride, &offset, NULL))
+    {
+        eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to get internal dma-buf for linear PRIME pixmap");
+        goto done;
+    }
+    if (ppix->prime_dmabuf < 0)
+    {
+        eplSetError(inst->platform, EGL_BAD_ALLOC,
+                "Possible driver error: Failed to get internal dma-buf for linear PRIME pixmap");
+        goto done;
+    }
+
+    // XCB will close the file descriptor after sending the request, so we have
+    // to duplicate it.
+    fd = dup(ppix->prime_dmabuf);
+    if (fd < 0)
+    {
+        eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to dup dmabuf: %s\n", strerror(errno));
+        goto done;
+    }
+
+    ppix->prime_pixmap = xcb_generate_id(inst->conn);
+    cookie = xcb_dri3_pixmap_from_buffers_checked(inst->conn,
+            ppix->prime_pixmap, inst->xscreen->root, 1, width, height, stride, offset,
+            0, 0, 0, 0, 0, 0, eplFormatInfoDepth(fmt->fmt), fmt->fmt->bpp,
+            DRM_FORMAT_MOD_LINEAR, &fd);
+
+    error = xcb_request_check(inst->conn, cookie);
+    if (error != NULL)
+    {
+        eplSetError(inst->platform, EGL_BAD_ALLOC, "DRI3PixmapFromBuffers request failed with error %d\n",
+                (int) error->error_code);
+        ppix->prime_pixmap = 0;
+        goto done;
+    }
+
+    success = EGL_TRUE;
+
+done:
+    free(error);
+
+    return success;
+}
+
 /**
  * Fetches the dma-buf for a Pixmap from the server and creates an
  * EGLExtColorBuffer in the driver for it.
@@ -132,7 +209,6 @@ static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
     xcb_dri3_buffers_from_pixmap_cookie_t cookie;
     xcb_dri3_buffers_from_pixmap_reply_t *reply = NULL;
     int depth = fmt->colors[0] + fmt->colors[1] + fmt->colors[2] + fmt->colors[3];
-    EGLPlatformColorBufferNVX serverBuffer = NULL;
     int32_t *fds = NULL;
     EGLBoolean prime = EGL_FALSE;
     EGLBoolean success = EGL_FALSE;
@@ -154,20 +230,6 @@ static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
     }
     fds = xcb_dri3_buffers_from_pixmap_buffers(reply);
 
-    if (xcb_dri3_buffers_from_pixmap_buffers_length(reply) <= 0)
-    {
-        eplSetError(inst->platform, EGL_BAD_MATCH, "Pixmap 0x%x reports zero planes\n", xpix);
-        goto done;
-    }
-
-    if (xcb_dri3_buffers_from_pixmap_buffers_length(reply) != 1)
-    {
-        eplSetError(inst->platform, EGL_BAD_MATCH,
-                "Pixmap 0x%x has %d planes, but multi-plane buffers are not supported\n",
-                xpix, xcb_dri3_buffers_from_pixmap_buffers_length(reply));
-        goto done;
-    }
-
     if (reply->depth != depth)
     {
         eplSetError(inst->platform, EGL_BAD_MATCH,
@@ -183,29 +245,26 @@ static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
         goto done;
     }
 
-    if (inst->force_prime || !CheckModifierSupported(inst, driverFmt, reply->modifier))
+    if (inst->force_prime || !CheckDirectSupported(inst, driverFmt, reply))
     {
         prime = EGL_TRUE;
     }
-    if (prime && reply->modifier != DRM_FORMAT_MOD_LINEAR)
-    {
-        eplSetError(inst->platform, EGL_BAD_MATCH, "Pixmap 0x%x has unsupported modifier 0x%llx\n",
-                xpix, (unsigned long long) reply->modifier);
-        goto done;
-    }
 
-    serverBuffer = inst->platform->priv->egl.PlatformImportColorBufferNVX(inst->internal_display->edpy,
-            fds[0], width, height, fmt->fourcc,
-            xcb_dri3_buffers_from_pixmap_strides(reply)[0],
-            xcb_dri3_buffers_from_pixmap_offsets(reply)[0],
-            reply->modifier);
-    if (serverBuffer == NULL)
+    if (!prime)
     {
-        eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to import dma-buf for pixmap");
-        goto done;
+        ppix->buffer = inst->platform->priv->egl.PlatformImportColorBufferNVX(inst->internal_display->edpy,
+                fds[0], width, height, fmt->fourcc,
+                xcb_dri3_buffers_from_pixmap_strides(reply)[0],
+                xcb_dri3_buffers_from_pixmap_offsets(reply)[0],
+                reply->modifier);
+        if (ppix->buffer == NULL)
+        {
+            eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to import dma-buf for pixmap");
+            goto done;
+        }
+        ppix->prime_dmabuf = fds[0];
     }
-
-    if (prime)
+    else
     {
         ppix->buffer = AllocInternalBuffer(inst, driverFmt, width, height);
         if (ppix->buffer == NULL)
@@ -213,12 +272,35 @@ static EGLBoolean ImportPixmap(X11DisplayInstance *inst, EplSurface *surf,
             goto done;
         }
 
-        ppix->blit_target = serverBuffer;
-        ppix->prime_dmabuf = fds[0];
-    }
-    else
-    {
-        ppix->buffer = serverBuffer;
+        if (reply->modifier == DRM_FORMAT_MOD_LINEAR &&
+                xcb_dri3_buffers_from_pixmap_buffers_length(reply) == 1)
+        {
+            // We need to use PRIME, but the server is using a linear buffer, so we
+            // can blit to it directly.
+
+            ppix->blit_target = inst->platform->priv->egl.PlatformImportColorBufferNVX(inst->internal_display->edpy,
+                    fds[0], width, height, fmt->fourcc,
+                    xcb_dri3_buffers_from_pixmap_strides(reply)[0],
+                    xcb_dri3_buffers_from_pixmap_offsets(reply)[0],
+                    reply->modifier);
+            if (ppix->blit_target == NULL)
+            {
+                eplSetError(inst->platform, EGL_BAD_ALLOC, "Failed to import dma-buf for pixmap");
+                goto done;
+            }
+            ppix->prime_dmabuf = fds[0];
+        }
+        else
+        {
+            // Otherwise, create a linear intermediate pixmap. We'll blit to that
+            // pixmap, and then send a CopyArea request to blit to the caller's
+            // pixmap.
+
+            if (!AllocLinearPixmap(inst, surf, driverFmt, width, height))
+            {
+                goto done;
+            }
+        }
     }
 
     success = EGL_TRUE;
@@ -269,6 +351,20 @@ static void PixmapDamageCallback(void *param, int syncfd, unsigned int flags)
             eplX11WaitForFD(syncfd);
         }
     }
+
+    if (ppix->prime_pixmap != 0)
+    {
+        // TODO: Should we hold on to the GC that we create here? We should be
+        // able to reuse it for any drawable that has the same depth.
+
+        xcb_create_gc_value_list_t gcvalues;
+        xcb_gcontext_t gc = xcb_generate_id(ppix->inst->conn);
+        xcb_create_gc_aux(ppix->inst->conn, gc, ppix->xpix, 0, &gcvalues);
+
+        xcb_copy_area(ppix->inst->conn, ppix->prime_pixmap, ppix->xpix, gc,
+                0, 0, 0, 0, ppix->width, ppix->height);
+        xcb_free_gc(ppix->inst->conn, gc);
+    }
 }
 
 void eplX11DestroyPixmap(EplSurface *surf)
@@ -290,6 +386,10 @@ void eplX11DestroyPixmap(EplSurface *surf)
             if (ppix->blit_target != NULL)
             {
                 ppix->inst->platform->priv->egl.PlatformFreeColorBufferNVX(ppix->inst->internal_display->edpy, ppix->blit_target);
+            }
+            if (ppix->prime_pixmap != 0 && ppix->inst->conn != NULL)
+            {
+                xcb_free_pixmap(ppix->inst->conn, ppix->prime_pixmap);
             }
             eplX11DisplayInstanceUnref(ppix->inst);
         }
@@ -386,6 +486,8 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     surf->priv = (EplImplSurface *) ppix;
     ppix->inst = eplX11DisplayInstanceRef(inst);
     ppix->xpix = xpix;
+    ppix->width = geomReply->width;
+    ppix->height = geomReply->height;
     ppix->prime_dmabuf = -1;
 
     if (!ImportPixmap(inst, surf, xpix, fmt, geomReply->width, geomReply->height))
