@@ -229,8 +229,6 @@ static EGLBoolean eplUnloadExternalPlatformExport(void *platformData)
 
         // Remove the display from the list and decrement its refcount.
         glvnd_list_del(&pdpy->entry);
-        eplPlatformDataUnref(pdpy->platform);
-        pdpy->platform = NULL;
         pthread_mutex_unlock(&pdpy->mutex);
 
         // Note that if some other thread is still holding a reference to this
@@ -340,12 +338,13 @@ static void DestroyDisplay(EplDisplay *pdpy)
 {
     assert(pdpy != NULL);
     assert(pdpy->refcount.refcount == 0);
-    assert(pdpy->platform == NULL);
 
     DestroyAllSurfaces(pdpy);
 
     pdpy->platform->impl->CleanupDisplay(pdpy);
     pthread_mutex_destroy(&pdpy->mutex);
+
+    eplPlatformDataUnref(pdpy->platform);
     free(pdpy);
 }
 
