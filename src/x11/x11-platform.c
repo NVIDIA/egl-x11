@@ -66,7 +66,20 @@ static X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBool
 static void eplX11DisplayInstanceFree(X11DisplayInstance *inst);
 EPL_REFCOUNT_DEFINE_TYPE_FUNCS(X11DisplayInstance, eplX11DisplayInstance, refcount, eplX11DisplayInstanceFree);
 
+static void eplX11CleanupPlatform(EplPlatformData *plat);
 static void eplX11CleanupDisplay(EplDisplay *pdpy);
+static const char *eplX11QueryString(EplPlatformData *plat, EplDisplay *pdpy, EGLExtPlatformString name);
+static void *eplX11GetHookFunction(EplPlatformData *plat, const char *name);
+static EGLBoolean eplX11IsSameDisplay(EplPlatformData *plat, EplDisplay *pdpy, EGLint platform,
+        void *native_display, const EGLAttrib *attribs);
+static EGLBoolean eplX11GetPlatformDisplay(EplPlatformData *plat, EplDisplay *pdpy,
+        void *native_display, const EGLAttrib *attribs,
+        struct glvnd_list *existing_displays);
+static EGLBoolean eplX11InitializeDisplay(EplPlatformData *plat, EplDisplay *pdpy, EGLint *major, EGLint *minor);
+static void eplX11TerminateDisplay(EplPlatformData *plat, EplDisplay *pdpy);
+static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf);
+static void eplX11FreeSurface(EplDisplay *pdpy, EplSurface *surf);
+static EGLBoolean eplX11WaitGL(EplDisplay *pdpy, EplSurface *psurf);
 
 static const EplHookFunc X11_HOOK_FUNCTIONS[] =
 {
@@ -75,6 +88,24 @@ static const EplHookFunc X11_HOOK_FUNCTIONS[] =
     { "eglSwapInterval", eplX11SwapInterval },
 };
 static const int NUM_X11_HOOK_FUNCTIONS = sizeof(X11_HOOK_FUNCTIONS) / sizeof(X11_HOOK_FUNCTIONS[0]);
+
+static const EplImplFuncs X11_IMPL_FUNCS =
+{
+    .CleanupPlatform = eplX11CleanupPlatform,
+    .QueryString = eplX11QueryString,
+    .GetHookFunction = eplX11GetHookFunction,
+    .IsSameDisplay = eplX11IsSameDisplay,
+    .GetPlatformDisplay = eplX11GetPlatformDisplay,
+    .CleanupDisplay = eplX11CleanupDisplay,
+    .InitializeDisplay = eplX11InitializeDisplay,
+    .TerminateDisplay = eplX11TerminateDisplay,
+    .CreateWindowSurface = eplX11CreateWindowSurface,
+    .CreatePixmapSurface = eplX11CreatePixmapSurface,
+    .DestroySurface = eplX11DestroySurface,
+    .FreeSurface = eplX11FreeSurface,
+    .SwapBuffers = eplX11SwapBuffers,
+    .WaitGL = eplX11WaitGL,
+};
 
 /**
  * True if the kernel might support DMA_BUF_IOCTL_IMPORT_SYNC_FILE and
@@ -223,7 +254,7 @@ static const char *eplX11QueryString(EplPlatformData *plat, EplDisplay *pdpy, EG
     }
 }
 
-void *eplX11GetHookFunction(EplPlatformData *plat, const char *name)
+static void *eplX11GetHookFunction(EplPlatformData *plat, const char *name)
 {
     return eplFindHookFunction(X11_HOOK_FUNCTIONS, NUM_X11_HOOK_FUNCTIONS, name);
 }
@@ -1363,20 +1394,3 @@ EGLBoolean eplX11WaitForFD(int syncfd)
     }
 }
 
-const EplImplFuncs X11_IMPL_FUNCS =
-{
-    .CleanupPlatform = eplX11CleanupPlatform,
-    .QueryString = eplX11QueryString,
-    .GetHookFunction = eplX11GetHookFunction,
-    .IsSameDisplay = eplX11IsSameDisplay,
-    .GetPlatformDisplay = eplX11GetPlatformDisplay,
-    .CleanupDisplay = eplX11CleanupDisplay,
-    .InitializeDisplay = eplX11InitializeDisplay,
-    .TerminateDisplay = eplX11TerminateDisplay,
-    .CreateWindowSurface = eplX11CreateWindowSurface,
-    .CreatePixmapSurface = eplX11CreatePixmapSurface,
-    .DestroySurface = eplX11DestroySurface,
-    .FreeSurface = eplX11FreeSurface,
-    .SwapBuffers = eplX11SwapBuffers,
-    .WaitGL = eplX11WaitGL,
-};

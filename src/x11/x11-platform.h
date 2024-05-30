@@ -338,8 +338,6 @@ struct _EplImplDisplay
 
 EPL_REFCOUNT_DECLARE_TYPE_FUNCS(X11DisplayInstance, eplX11DisplayInstance);
 
-extern const EplImplFuncs X11_IMPL_FUNCS;
-
 /**
  * Returns the xcb_connection_t and the screen number for a native xlib
  * Display.
