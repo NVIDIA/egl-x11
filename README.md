@@ -1,14 +1,29 @@
-NVIDIA EGL Platform Library Base
+NVIDIA XLib and XCB EGL Platform Library
 ================================
 
-This is a skeletal EGL platform library, with support functions to handle a lot
-of the common bookkeeping that any platform library would need.
+Overview
+--------
 
-There's a lot of boilerplate and bookkeeping needed to keep track of internal
-and external EGLDisplays, handle refcounting for eglInitialize and
-eglTerminate, keep track of EGLSurfaces, and fudge EGLConfig attributes.
+This is an EGL platform library for the NVIDIA driver to support XWayland via
+xlib (using `EGL_KHR_platform_x11`) or xcb (using `EGL_EXT_platform_xcb`).
 
-Most of that common bookkeeping is implemented in `platform-base.c`. That
-common code then calls into platform-specific functions, which are declared in
-`platform-impl.h`.
+Building and Installing
+-----------------------
 
+This library depends on:
+- libxcb, libxcb-present, and libxcb-dri3, version 1.17.0
+- libgbm, version 21.3.0
+- libdrm, version 2.4.99
+- libx11 (only if building the xlib library)
+- EGL headers
+
+In addition, this library depends on a (still somewhat experimental) interface
+in the NVIDIA driver, which is supported only in 560 or later series drivers.
+
+To build and install, use Meson:
+
+```sh
+meson builddir
+ninja -C builddir
+ninja -C builddir install
+```
