@@ -430,6 +430,7 @@ static EGLBoolean FilterNativePixmap(EplDisplay *pdpy, EplConfig **configs, EGLi
 
         configs[match++] = config;
     }
+    *count = match;
     free(buffers);
 
     return EGL_TRUE;
