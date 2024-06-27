@@ -496,7 +496,15 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     }
 
     buffers[1] = (EGLAttrib) ppix->buffer;
-    buffers[3] = (EGLAttrib) ppix->blit_target;
+    if (ppix->blit_target != NULL)
+    {
+        buffers[3] = (EGLAttrib) ppix->blit_target;
+    }
+    else
+    {
+        // If we're not using PRIME, then we don't need the damage callback.
+        buffers[2] = EGL_NONE;
+    }
     esurf = inst->platform->priv->egl.PlatformCreateSurfaceNVX(inst->internal_display->edpy, config,
             buffers, internalAttribs);
     if (esurf == EGL_NO_SURFACE)
