@@ -1054,7 +1054,7 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
     }
 
     gbmName = gbm_device_get_backend_name(inst->gbmdev);
-    if (gbmName == NULL || strcmp(gbmName, "nvidia") != 0)
+    if (gbmName == NULL || (strcmp(gbmName, "nvidia") != 0 && strcmp(gbmName, "nvidia_rm") != 0))
     {
         // This should never happen.
         eplSetError(pdpy->platform, EGL_BAD_ACCESS, "Internal error: GBM device is not an NVIDIA device");
