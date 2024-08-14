@@ -131,12 +131,20 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
         const EGLExtDriver *driver, EGLExtPlatform *extplatform,
         EGLint platform_enum)
 {
-    EplPlatformData *plat = eplPlatformBaseAllocate(major, minor,
-        driver, extplatform, platform_enum, &X11_IMPL_FUNCS,
-        sizeof(EplImplPlatform));
+    EplPlatformData *plat = NULL;
     EGLBoolean timelineSupported = EGL_TRUE;
     pfn_eglPlatformGetVersionNVX ptr_eglPlatformGetVersionNVX;
 
+    // Before we do anything else, make sure that we've got a recent enough
+    // version of libgbm.
+    if (dlsym(RTLD_DEFAULT, "gbm_bo_create_with_modifiers2") == NULL)
+    {
+        return EGL_FALSE;
+    }
+
+    plat = eplPlatformBaseAllocate(major, minor,
+        driver, extplatform, platform_enum, &X11_IMPL_FUNCS,
+        sizeof(EplImplPlatform));
     if (plat == NULL)
     {
         return EGL_FALSE;
