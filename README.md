@@ -20,6 +20,11 @@ This library depends on:
 In addition, this library depends on a (still somewhat experimental) interface
 in the NVIDIA driver, which is supported only in 560 or later series drivers.
 
+For full functionality, it also needs the explicit sync protocol added to
+version 1.4 of the Present and DRI3 extensions, which is available in XWayland
+24.1 and later. Without explicit sync support, you may get reduced performance
+and out-of-order frames.
+
 To build and install, use Meson:
 
 ```sh
