@@ -54,7 +54,7 @@ if get_option('xcb')
       dep_eglexternal,
     ],
     link_with: [ platform_base ],
-    version : '1',
+    version : meson.project_version(),
     gnu_symbol_visibility: 'hidden',
     install: true)
 
@@ -77,7 +77,7 @@ if enable_xlib
       dep_eglexternal,
     ],
     link_with: [ platform_base ],
-    version : '1',
+    version : meson.project_version(),
     gnu_symbol_visibility: 'hidden',
     install: true)
 
