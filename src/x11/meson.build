@@ -58,7 +58,7 @@ if get_option('xcb')
     gnu_symbol_visibility: 'hidden',
     install: true)
 
-  install_data('xcb-platform.json',
+  install_data('20_nvidia_xcb.json',
     install_dir: '@0@/egl/egl_external_platform.d'.format(get_option('datadir')))
 endif
 
@@ -81,6 +81,6 @@ if enable_xlib
     gnu_symbol_visibility: 'hidden',
     install: true)
 
-  install_data('xlib-platform.json',
+  install_data('20_nvidia_xlib.json',
     install_dir: '@0@/egl/egl_external_platform.d'.format(get_option('datadir')))
 endif
