@@ -282,6 +282,7 @@ glvnd_list_is_empty(struct glvnd_list *head)
  * support typeof() and fails with this implementation, please try a newer
  * compiler.
  */
+#warning "typeof() is not supported. The fallback for this is undefined behavior."
 #define __glvnd_container_of(ptr, sample, member)                            \
     (void *)((char *)(ptr)                                             \
             - ((char *)&(sample)->member - (char *)(sample)))
