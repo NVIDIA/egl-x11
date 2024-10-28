@@ -23,5 +23,10 @@ dep_threads = dependency('threads')
 dep_eglexternal = dependency('eglexternalplatform', version : ['>=1.2', '<2'])
 inc_base = include_directories('src/base')
 
+cc = meson.get_compiler('c')
+if cc.compiles('typeof(int *);', name : 'typeof')
+  add_project_arguments('-DHAVE_TYPEOF', language : ['c'])
+endif
+
 subdir('src/base')
 
