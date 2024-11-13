@@ -508,7 +508,7 @@ static xcb_screen_t *GetXCBScreen(xcb_connection_t *conn, int screen)
     {
         return NULL;
     }
-    for (i=0; screen; i++)
+    for (i=0; i<screen; i++)
     {
         xcb_screen_next(&iter);
     }
@@ -1286,11 +1286,10 @@ EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat, EplDisplay *pd
 {
     EGLAttrib *internalAttribs = NULL;
     int count = 0;
-    int i;
 
     if (attribs != NULL)
     {
-        for (count = 0; attribs[count] != EGL_NONE; i += 2)
+        for (count = 0; attribs[count] != EGL_NONE; count += 2)
         {
             if (attribs[count] == EGL_SURFACE_Y_INVERTED_NVX)
             {
