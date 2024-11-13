@@ -1361,10 +1361,8 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     pwin->present_event_id = xcb_generate_id(inst->conn);
     pwin->present_event = xcb_register_for_special_xge(inst->conn,
             &xcb_present_id, pwin->present_event_id, &pwin->present_event_stamp);
-    presentSelectCookie = xcb_present_select_input_checked(inst->conn, pwin->present_event_id, xwin,
-            XCB_PRESENT_EVENT_MASK_CONFIGURE_NOTIFY
-            | XCB_PRESENT_EVENT_MASK_COMPLETE_NOTIFY
-            | XCB_PRESENT_EVENT_MASK_IDLE_NOTIFY);
+    presentSelectCookie = xcb_present_select_input_checked(inst->conn,
+            pwin->present_event_id, xwin, eventMask);
     error = xcb_request_check(inst->conn, presentSelectCookie);
     if (error != NULL)
     {
