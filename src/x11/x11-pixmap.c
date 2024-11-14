@@ -405,7 +405,7 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
         EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform)
 {
     X11DisplayInstance *inst = pdpy->priv->inst;
-    xcb_pixmap_t xpix = 0;
+    xcb_pixmap_t xpix = eplX11GetNativeXID(pdpy, native_surface, create_platform);
     X11Pixmap *ppix = NULL;
     const EplConfig *configInfo;
     const EplFormatInfo *fmt;
@@ -423,20 +423,10 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     };
     EGLAttrib *internalAttribs = NULL;
 
-    if (create_platform)
+    if (xpix == 0)
     {
-        if (pdpy->platform_enum == EGL_PLATFORM_X11_KHR)
-        {
-            xpix = (uint32_t) *((unsigned long *) native_surface);
-        }
-        else
-        {
-            xpix = *((uint32_t *) native_surface);
-        }
-    }
-    else
-    {
-        xpix = (xcb_pixmap_t) ((uintptr_t) native_surface);
+        eplSetError(plat, EGL_BAD_NATIVE_PIXMAP, "Invalid native pixmap %p\n", native_surface);
+        return EGL_NO_SURFACE;
     }
 
     configInfo = eplConfigListFind(inst->configs, config);

@@ -355,6 +355,18 @@ xcb_connection_t *eplX11GetXCBConnection(void *native_display, int *ret_screen);
 X11XlibDisplayClosedData *eplX11AddXlibDisplayClosedCallback(void *xlib_native_display);
 
 /**
+ * Returns the XID for the native surface handle in one of the
+ * eglCreate*Surface functions.
+ *
+ * \param pdpy The EplDisplay struct
+ * \param native_surface The native surface handle
+ * \param create_platform True if this is for one of the
+ *      eglCreatePlatform*Surface functions.
+ * \return The XID value, or 0 if the native handle is invalid.
+ */
+uint32_t eplX11GetNativeXID(EplDisplay *pdpy, void *native_surface, EGLBoolean create_platform);
+
+/**
  * Returns true if a native display has been closed.
  *
  * Note that this only works for an Xlib Display, because XCB doesn't have any

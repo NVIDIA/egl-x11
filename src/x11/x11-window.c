@@ -1245,7 +1245,7 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
         EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform)
 {
     X11DisplayInstance *inst = pdpy->priv->inst;
-    xcb_window_t xwin = 0;
+    xcb_window_t xwin = eplX11GetNativeXID(pdpy, native_surface, create_platform);
     xcb_void_cookie_t presentSelectCookie;
     xcb_get_window_attributes_cookie_t winodwAttribCookie;
     xcb_get_window_attributes_reply_t *windowAttribReply = NULL;
@@ -1265,20 +1265,10 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     EGLAttrib *internalAttribs = NULL;
     uint32_t eventMask;
 
-    if (create_platform)
+    if (xwin == 0)
     {
-        if (pdpy->platform_enum == EGL_PLATFORM_X11_KHR)
-        {
-            xwin = (uint32_t) *((unsigned long *) native_surface);
-        }
-        else
-        {
-            xwin = *((uint32_t *) native_surface);
-        }
-    }
-    else
-    {
-        xwin = (xcb_window_t) ((uintptr_t) native_surface);
+        eplSetError(plat, EGL_BAD_NATIVE_WINDOW, "Invalid native window %p\n", native_surface);
+        return EGL_NO_SURFACE;
     }
 
     configInfo = eplConfigListFind(inst->configs, config);
