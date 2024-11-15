@@ -1241,6 +1241,27 @@ done:
     pthread_mutex_unlock(&pwin->mutex);
 }
 
+static EGLBoolean CheckExistingWindow(EplDisplay *pdpy, xcb_window_t xwin)
+{
+    EplSurface *psurf;
+
+    glvnd_list_for_each_entry(psurf, &pdpy->surface_list, entry)
+    {
+        if (psurf->type == EPL_SURFACE_TYPE_WINDOW)
+        {
+            X11Window *pwin = (X11Window *) psurf->priv;
+            if (pwin->xwin == xwin)
+            {
+                eplSetError(pdpy->platform, EGL_BAD_ALLOC,
+                        "An EGLSurface already exists for window 0x%x\n", xwin);
+                return EGL_FALSE;
+            }
+        }
+    }
+
+    return EGL_TRUE;
+}
+
 EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *surf,
         EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform)
 {
@@ -1268,6 +1289,10 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     if (xwin == 0)
     {
         eplSetError(plat, EGL_BAD_NATIVE_WINDOW, "Invalid native window %p\n", native_surface);
+        return EGL_NO_SURFACE;
+    }
+    if (!CheckExistingWindow(pdpy, xwin))
+    {
         return EGL_NO_SURFACE;
     }
 
