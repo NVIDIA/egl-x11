@@ -1401,3 +1401,34 @@ EGLBoolean eplX11WaitForFD(int syncfd)
     }
 }
 
+uint32_t eplX11GetNativeXID(EplDisplay *pdpy, void *native_surface, EGLBoolean create_platform)
+{
+    unsigned long xid = 0;
+
+    if (create_platform)
+    {
+        if (native_surface != NULL)
+        {
+            if (pdpy->platform_enum == EGL_PLATFORM_X11_KHR)
+            {
+                xid = *((unsigned long *) native_surface);
+            }
+            else
+            {
+                xid = *((uint32_t *) native_surface);
+            }
+        }
+    }
+    else
+    {
+        xid = (unsigned long) ((uintptr_t) native_surface);
+    }
+
+    // Make sure the value that we get actually fits in a 32-bit integer.
+    if (((uint32_t) xid) != xid)
+    {
+        return 0;
+    }
+
+    return xid;
+}

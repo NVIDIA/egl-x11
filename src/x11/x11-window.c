@@ -1241,11 +1241,32 @@ done:
     pthread_mutex_unlock(&pwin->mutex);
 }
 
+static EGLBoolean CheckExistingWindow(EplDisplay *pdpy, xcb_window_t xwin)
+{
+    EplSurface *psurf;
+
+    glvnd_list_for_each_entry(psurf, &pdpy->surface_list, entry)
+    {
+        if (psurf->type == EPL_SURFACE_TYPE_WINDOW)
+        {
+            X11Window *pwin = (X11Window *) psurf->priv;
+            if (pwin->xwin == xwin)
+            {
+                eplSetError(pdpy->platform, EGL_BAD_ALLOC,
+                        "An EGLSurface already exists for window 0x%x\n", xwin);
+                return EGL_FALSE;
+            }
+        }
+    }
+
+    return EGL_TRUE;
+}
+
 EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *surf,
         EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform)
 {
     X11DisplayInstance *inst = pdpy->priv->inst;
-    xcb_window_t xwin = 0;
+    xcb_window_t xwin = eplX11GetNativeXID(pdpy, native_surface, create_platform);
     xcb_void_cookie_t presentSelectCookie;
     xcb_get_window_attributes_cookie_t winodwAttribCookie;
     xcb_get_window_attributes_reply_t *windowAttribReply = NULL;
@@ -1265,20 +1286,14 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     EGLAttrib *internalAttribs = NULL;
     uint32_t eventMask;
 
-    if (create_platform)
+    if (xwin == 0)
     {
-        if (pdpy->platform_enum == EGL_PLATFORM_X11_KHR)
-        {
-            xwin = (uint32_t) *((unsigned long *) native_surface);
-        }
-        else
-        {
-            xwin = *((uint32_t *) native_surface);
-        }
+        eplSetError(plat, EGL_BAD_NATIVE_WINDOW, "Invalid native window %p\n", native_surface);
+        return EGL_NO_SURFACE;
     }
-    else
+    if (!CheckExistingWindow(pdpy, xwin))
     {
-        xwin = (xcb_window_t) ((uintptr_t) native_surface);
+        return EGL_NO_SURFACE;
     }
 
     configInfo = eplConfigListFind(inst->configs, config);

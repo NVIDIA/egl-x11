@@ -401,11 +401,32 @@ void eplX11DestroyPixmap(EplSurface *surf)
     }
 }
 
+static EGLBoolean CheckExistingPixmap(EplDisplay *pdpy, xcb_pixmap_t xpix)
+{
+    EplSurface *psurf;
+
+    glvnd_list_for_each_entry(psurf, &pdpy->surface_list, entry)
+    {
+        if (psurf->type == EPL_SURFACE_TYPE_PIXMAP)
+        {
+            X11Pixmap *ppix = (X11Pixmap *) psurf->priv;
+            if (ppix->xpix == xpix)
+            {
+                eplSetError(pdpy->platform, EGL_BAD_ALLOC,
+                        "An EGLSurface already exists for pixmap 0x%x\n", xpix);
+                return EGL_FALSE;
+            }
+        }
+    }
+
+    return EGL_TRUE;
+}
+
 EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *surf,
         EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform)
 {
     X11DisplayInstance *inst = pdpy->priv->inst;
-    xcb_pixmap_t xpix = 0;
+    xcb_pixmap_t xpix = eplX11GetNativeXID(pdpy, native_surface, create_platform);
     X11Pixmap *ppix = NULL;
     const EplConfig *configInfo;
     const EplFormatInfo *fmt;
@@ -423,20 +444,14 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     };
     EGLAttrib *internalAttribs = NULL;
 
-    if (create_platform)
+    if (xpix == 0)
     {
-        if (pdpy->platform_enum == EGL_PLATFORM_X11_KHR)
-        {
-            xpix = (uint32_t) *((unsigned long *) native_surface);
-        }
-        else
-        {
-            xpix = *((uint32_t *) native_surface);
-        }
+        eplSetError(plat, EGL_BAD_NATIVE_PIXMAP, "Invalid native pixmap %p\n", native_surface);
+        return EGL_NO_SURFACE;
     }
-    else
+    if (!CheckExistingPixmap(pdpy, xpix))
     {
-        xpix = (xcb_pixmap_t) ((uintptr_t) native_surface);
+        return EGL_NO_SURFACE;
     }
 
     configInfo = eplConfigListFind(inst->configs, config);
