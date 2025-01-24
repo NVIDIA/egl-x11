@@ -85,7 +85,6 @@ EplPlatformData *eplPlatformBaseAllocate(int major, int minor,
     assert(impl->InitializeDisplay != NULL);
     assert(impl->TerminateDisplay != NULL);
     assert(impl->DestroySurface != NULL);
-    assert(impl->FreeSurface != NULL);
 
     // SwapBuffers is only required if the platform supports windows.
     assert(impl->CreateWindowSurface == NULL || impl->SwapBuffers != NULL);
@@ -356,17 +355,16 @@ EGLDisplay eplGetCurrentDisplay(void)
 
 static void DestroyAllSurfaces(EplDisplay *pdpy)
 {
+    pthread_rwlock_wrlock(&pdpy->surface_list_lock);
+
     while (!glvnd_list_is_empty(&pdpy->surface_list))
     {
         EplSurface *psurf = glvnd_list_first_entry(&pdpy->surface_list, EplSurface, entry);
 
-        // Bump the refcount, as if we'd called eglSurfaceAcquire, so that
-        // eplSurfaceRelease works below.
-        eplRefCountRef(&psurf->refcount);
-
         DeleteSurfaceCommon(pdpy, psurf);
-        eplSurfaceRelease(pdpy, psurf);
     }
+
+    pthread_rwlock_unlock(&pdpy->surface_list_lock);
 }
 
 static void DestroyDisplay(EplDisplay *pdpy)
@@ -518,47 +516,78 @@ EGLBoolean eplTerminateInternalDisplay(EplPlatformData *platform, EplInternalDis
     return EGL_TRUE;
 }
 
-EplSurface *eplSurfaceAcquire(EplDisplay *pdpy, EGLSurface esurf)
+const struct glvnd_list *eplDisplayLockSurfaceList(EplDisplay *pdpy)
+{
+    pthread_rwlock_rdlock(&pdpy->surface_list_lock);
+
+    return &pdpy->surface_list;
+}
+
+void eplDisplayUnlockSurfaceList(EplDisplay *pdpy)
+{
+    pthread_rwlock_unlock(&pdpy->surface_list_lock);
+}
+
+EplSurface *eplSurfaceListLookup(const struct glvnd_list *surface_list, EGLSurface esurf)
 {
     EplSurface *psurf;
-    EplSurface *found = NULL;
 
-    if (pdpy == NULL || esurf == EGL_NO_SURFACE)
+    if (esurf == EGL_NO_SURFACE)
     {
         return NULL;
     }
 
-    glvnd_list_for_each_entry(psurf, &pdpy->surface_list, entry)
+    glvnd_list_for_each_entry(psurf, surface_list, entry)
     {
         if (psurf->external_surface == esurf)
         {
-            found = psurf;
-            break;
+            return psurf;
         }
     }
 
-    if (found != NULL)
-    {
-        eplRefCountRef(&found->refcount);
-    }
-
-    return found;
+    return NULL;
 }
 
-void eplSurfaceRelease(EplDisplay *pdpy, EplSurface *psurf)
+EGLBoolean eplHookDisplaySurface(EGLDisplay edpy, EGLSurface esurf,
+        EplDisplay **ret_pdpy, EplSurface **ret_psurf)
+{
+    EplDisplay *pdpy = eplDisplayAcquire(edpy);
+    const struct glvnd_list *surface_list = NULL;
+    EplSurface *psurf = NULL;
+
+    *ret_pdpy = NULL;
+    *ret_psurf = NULL;
+
+    if (pdpy == NULL)
+    {
+        return EGL_FALSE;
+    }
+
+    if (esurf == EGL_NO_SURFACE)
+    {
+        eplSetError(pdpy->platform, EGL_BAD_SURFACE, "EGLSurface handle is EGL_NO_SURFACE");
+        eplDisplayRelease(pdpy);
+        return EGL_FALSE;
+    }
+
+    surface_list = eplDisplayLockSurfaceList(pdpy);
+    psurf = eplSurfaceListLookup(surface_list, esurf);
+    if (psurf == NULL)
+    {
+        eplDisplayUnlockSurfaceList(pdpy);
+    }
+    *ret_pdpy = pdpy;
+    *ret_psurf = psurf;
+    return EGL_TRUE;
+}
+
+void eplHookDisplaySurfaceEnd(EplDisplay *pdpy, const EplSurface *psurf)
 {
     if (psurf != NULL)
     {
-        if (eplRefCountUnref(&psurf->refcount))
-        {
-            // If the refcount is zero, then that means eglDestroySurface or
-            // eglTerminate has already run, so the platform-specific code has
-            // already cleaned up the surface.
-            assert(psurf->deleted);
-            pdpy->platform->impl->FreeSurface(pdpy, psurf);
-            FreeBaseSurface(psurf);
-        }
+        eplDisplayUnlockSurfaceList(pdpy);
     }
+    eplDisplayRelease(pdpy);
 }
 
 static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
@@ -658,6 +687,14 @@ static EGLDisplay eplGetPlatformDisplayExport(void *platformData,
     if (!eplInitRecursiveMutex(&pdpy->mutex))
     {
         eplSetError(plat, EGL_BAD_ALLOC, "Failed to create internal mutex");
+        free(pdpy);
+        goto done;
+    }
+
+    if (pthread_rwlock_init(&pdpy->surface_list_lock, NULL) != 0)
+    {
+        eplSetError(plat, EGL_BAD_ALLOC, "Failed to create internal locks");
+        pthread_mutex_destroy(&pdpy->mutex);
         free(pdpy);
         goto done;
     }
@@ -836,18 +873,20 @@ static EGLSurface CommonCreateSurface(EplDisplay *pdpy,
     psurf = AllocBaseSurface(pdpy->platform);
     if (psurf == NULL)
     {
-        eplDisplayRelease(pdpy);
         return EGL_NO_SURFACE;
     }
 
     psurf->type = type;
+
+    pthread_rwlock_wrlock(&pdpy->surface_list_lock);
 
     if (type == EPL_SURFACE_TYPE_WINDOW)
     {
         if (pdpy->platform->impl->CreateWindowSurface != NULL)
         {
             psurf->internal_surface = pdpy->platform->impl->CreateWindowSurface(pdpy->platform,
-                    pdpy, psurf, config, native_handle, attrib_list, create_platform);
+                    pdpy, psurf, config, native_handle, attrib_list, create_platform,
+                    &pdpy->surface_list);
         }
         else
         {
@@ -859,7 +898,8 @@ static EGLSurface CommonCreateSurface(EplDisplay *pdpy,
         if (pdpy->platform->impl->CreatePixmapSurface != NULL)
         {
             psurf->internal_surface = pdpy->platform->impl->CreatePixmapSurface(pdpy->platform,
-                    pdpy, psurf, config, native_handle, attrib_list, create_platform);
+                    pdpy, psurf, config, native_handle, attrib_list, create_platform,
+                    &pdpy->surface_list);
         }
         else
         {
@@ -876,7 +916,6 @@ static EGLSurface CommonCreateSurface(EplDisplay *pdpy,
     {
         psurf->external_surface = (EGLSurface) psurf;
         ret = psurf->external_surface;
-        eplRefCountRef(&psurf->refcount);
         glvnd_list_add(&psurf->entry, &pdpy->surface_list);
     }
     else
@@ -884,6 +923,7 @@ static EGLSurface CommonCreateSurface(EplDisplay *pdpy,
         FreeBaseSurface(psurf);
     }
 
+    pthread_rwlock_unlock(&pdpy->surface_list_lock);
     return ret;
 }
 
@@ -989,22 +1029,18 @@ static EGLSurface HookCreatePbufferSurface(EGLDisplay edpy, EGLConfig config, co
 
 static void DeleteSurfaceCommon(EplDisplay *pdpy, EplSurface *psurf)
 {
-    assert(!psurf->deleted);
+    glvnd_list_del(&psurf->entry);
 
-    if (!psurf->deleted)
-    {
-        psurf->deleted = EGL_TRUE;
-        glvnd_list_del(&psurf->entry);
-        pdpy->platform->impl->DestroySurface(pdpy, psurf);
+    pdpy->platform->impl->DestroySurface(pdpy, psurf, &pdpy->surface_list);
 
-        eplRefCountUnref(&psurf->refcount);
-    }
+    FreeBaseSurface(psurf);
 }
 
 static EGLBoolean HookDestroySurface(EGLDisplay edpy, EGLSurface esurf)
 {
     EplDisplay *pdpy;
-    EplSurface *psurf;
+    EplSurface *elem;
+    EplSurface *psurf = NULL;
     EGLBoolean ret = EGL_FALSE;
 
     pdpy = eplDisplayAcquire(edpy);
@@ -1013,11 +1049,20 @@ static EGLBoolean HookDestroySurface(EGLDisplay edpy, EGLSurface esurf)
         return EGL_FALSE;
     }
 
-    psurf = eplSurfaceAcquire(pdpy, esurf);
+    pthread_rwlock_wrlock(&pdpy->surface_list_lock);
+
+    glvnd_list_for_each_entry(elem, &pdpy->surface_list, entry)
+    {
+        if (elem->external_surface == esurf)
+        {
+            psurf = elem;
+            break;
+        }
+    }
+
     if (psurf != NULL)
     {
         DeleteSurfaceCommon(pdpy, psurf);
-        eplSurfaceRelease(pdpy, psurf);
         ret = EGL_TRUE;
     }
     else
@@ -1027,6 +1072,7 @@ static EGLBoolean HookDestroySurface(EGLDisplay edpy, EGLSurface esurf)
         ret = pdpy->platform->egl.DestroySurface(pdpy->internal_display, esurf);
     }
 
+    pthread_rwlock_unlock(&pdpy->surface_list_lock);
     eplDisplayRelease(pdpy);
     return ret;
 }
@@ -1037,8 +1083,7 @@ static EGLBoolean HookSwapBuffersWithDamage(EGLDisplay edpy, EGLSurface esurf, c
     EplSurface *psurf;
     EGLBoolean ret = EGL_FALSE;
 
-    pdpy = eplDisplayAcquire(edpy);
-    if (pdpy == NULL)
+    if (!eplHookDisplaySurface(edpy, esurf, &pdpy, &psurf))
     {
         return EGL_FALSE;
     }
@@ -1046,11 +1091,10 @@ static EGLBoolean HookSwapBuffersWithDamage(EGLDisplay edpy, EGLSurface esurf, c
     if (pdpy->platform->egl.GetCurrentDisplay() != edpy)
     {
         eplSetError(pdpy->platform, EGL_BAD_SURFACE, "EGLDisplay %p is not current", edpy);
-        eplDisplayRelease(pdpy);
+        eplHookDisplaySurfaceEnd(pdpy, psurf);
         return EGL_FALSE;
     }
 
-    psurf = eplSurfaceAcquire(pdpy, esurf);
     if (psurf != NULL)
     {
         if (psurf->type != EPL_SURFACE_TYPE_WINDOW)
@@ -1068,8 +1112,7 @@ static EGLBoolean HookSwapBuffersWithDamage(EGLDisplay edpy, EGLSurface esurf, c
             ret = pdpy->platform->impl->SwapBuffers(pdpy->platform, pdpy, psurf, rects, n_rects);
         }
 
-        eplSurfaceRelease(pdpy, psurf);
-        eplDisplayRelease(pdpy);
+        eplHookDisplaySurfaceEnd(pdpy, psurf);
     }
     else
     {
@@ -1081,7 +1124,7 @@ static EGLBoolean HookSwapBuffersWithDamage(EGLDisplay edpy, EGLSurface esurf, c
 
         // Release the display before calling into the driver, so that we don't
         // sit on the lock for a (potentially long) SwapBuffers operation.
-        eplDisplayRelease(pdpy);
+        eplHookDisplaySurfaceEnd(pdpy, psurf);
 
         if (SwapBuffersWithDamage != NULL && rects != NULL && n_rects > 0)
         {
@@ -1113,12 +1156,15 @@ static EGLBoolean HookWaitGL(void)
         return EGL_FALSE;
     }
 
+
     assert(pdpy->platform->impl->WaitGL != NULL);
     if (pdpy->platform->impl->WaitGL != NULL)
     {
-        EplSurface *psurf = eplSurfaceAcquire(pdpy, pdpy->platform->egl.GetCurrentSurface(EGL_DRAW));
+        const struct glvnd_list *surface_list = eplDisplayLockSurfaceList(pdpy);
+        EplSurface *psurf = eplSurfaceListLookup(surface_list, pdpy->platform->egl.GetCurrentSurface(EGL_DRAW));
+
         ret = pdpy->platform->impl->WaitGL(pdpy, psurf);
-        eplSurfaceRelease(pdpy, psurf);
+        eplDisplayUnlockSurfaceList(pdpy);
     }
     else
     {
@@ -1126,8 +1172,6 @@ static EGLBoolean HookWaitGL(void)
         // we have an implementation. But, if we wanted to handle this case,
         // then we could just forward the call through to the driver.
         eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Internal error: eglWaitGL hook should not be called");
-        eplDisplayRelease(pdpy);
-        return EGL_FALSE;
     }
 
     eplDisplayRelease(pdpy);
@@ -1148,15 +1192,15 @@ static EGLBoolean HookWaitNative(void)
     assert(pdpy->platform->impl->WaitNative != NULL);
     if (pdpy->platform->impl->WaitNative != NULL)
     {
-        EplSurface *psurf = eplSurfaceAcquire(pdpy, pdpy->platform->egl.GetCurrentSurface(EGL_DRAW));
+        const struct glvnd_list *surface_list = eplDisplayLockSurfaceList(pdpy);
+        EplSurface *psurf = eplSurfaceListLookup(surface_list, pdpy->platform->egl.GetCurrentSurface(EGL_DRAW));
+
         ret = pdpy->platform->impl->WaitNative(pdpy, psurf);
-        eplSurfaceRelease(pdpy, psurf);
+        eplDisplayUnlockSurfaceList(pdpy);
     }
     else
     {
         eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Internal error: eglWaitNative hook should not be called");
-        eplDisplayRelease(pdpy);
-        return EGL_FALSE;
     }
 
     eplDisplayRelease(pdpy);
@@ -1303,11 +1347,11 @@ static void *eplGetInternalHandleExport(EGLDisplay edpy, EGLenum type, void *han
         {
             if (type == EGL_OBJECT_SURFACE_KHR)
             {
-                EplSurface *psurf = eplSurfaceAcquire(pdpy, (EGLSurface) handle);
+                const struct glvnd_list *surface_list = eplDisplayLockSurfaceList(pdpy);
+                EplSurface *psurf = eplSurfaceListLookup(surface_list, (EGLSurface) handle);
                 if (psurf != NULL)
                 {
                     ret = psurf->internal_surface;
-                    eplSurfaceRelease(pdpy, psurf);
                 }
                 else
                 {
@@ -1320,6 +1364,7 @@ static void *eplGetInternalHandleExport(EGLDisplay edpy, EGLenum type, void *han
                      */
                     ret = handle;
                 }
+                eplDisplayUnlockSurfaceList(pdpy);
             }
             eplDisplayRelease(pdpy);
         }

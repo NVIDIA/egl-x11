@@ -183,10 +183,13 @@ typedef struct _EplImplFuncs
      * \param create_platform If this is true, then the call is from
      *      eglCreatePlatformWindowSurface. If false, it's from
      *      eglCreateWindowSurface.
+     * \param existing_surfaces A linked list of existing surfaces. The new
+     *      surface will not be in this list.
      * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
      */
     EGLSurface (* CreateWindowSurface) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
-            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+            const struct glvnd_list *existing_surfaces);
 
     /**
      * Creates an EGLSurface for a pixmap.
@@ -202,35 +205,29 @@ typedef struct _EplImplFuncs
      * \param create_platform If this is true, then the call is from
      *      eglCreatePlatformPixmapSurface. If false, it's from
      *      eglCreatePixmapSurface.
+     * \param existing_surfaces A linked list of existing surfaces. The new
+     *      surface will not be in this list.
      * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
      */
     EGLSurface (* CreatePixmapSurface) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
-            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+            const struct glvnd_list *existing_surfaces);
 
     /**
-     * Called to handle eglDestroySurface and eglTerminate.
+     * Called from eglDestroySurface and eglTerminate to destroy a surface.
      *
-     * Note that it's possible that the EplSurface struct itself might stick around
-     * if another thread is holding a reference to it.
+     * After this, the \c EplSurface struct itself is freed.
      *
-     * \c FreeSurface is called when the refcount actually drops to zero.
+     * Note that this function is called with the surface list already locked,
+     * so it must not try to call \c eplDisplayLockSurfaceList.
      *
-     * \param plat The EplPlatformData struct
      * \param pdpy The EplDisplay struct
+     * \param psurf The EplSurface that's being destroyed.
+     * \param existing_surfaces A linked list of existing surfaces. \p psurf
+     *      will not be in this list.
      */
-    void (* DestroySurface) (EplDisplay *pdpy, EplSurface *psurf);
-
-    /**
-     * Called when an EplSurface is about to be freed.
-     *
-     * At this point, it's safe to assume that no other thread is going to touch
-     * the surface, so the platform must free anything that it hasn't already freed
-     * in \c DestroySurface.
-     *
-     * \param plat The EplPlatformData struct
-     * \param pdpy The EplDisplay struct
-     */
-    void (* FreeSurface) (EplDisplay *pdpy, EplSurface *psurf);
+    void (* DestroySurface) (EplDisplay *pdpy, EplSurface *psurf,
+            const struct glvnd_list *existing_surfaces);
 
     /**
      * Implements eglSwapBuffers and eglSwapBuffersWithDamageEXT.
