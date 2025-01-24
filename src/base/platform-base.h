@@ -83,8 +83,6 @@ typedef struct
     EGLSurface internal_surface;
     EplSurfaceType type;
 
-    EGLBoolean deleted;
-
     /**
      * Private data used by the implementation.
      */
@@ -145,6 +143,17 @@ typedef struct
     // Everything after this in EplDisplay should be treated as internal to
     // platform-base.c.
 
+	/**
+	 * A read/write lock to protect against concurrent calls to eglTerminate.
+	 *
+	 * eglInitialize, eglTerminate, and library teardown will all take the read
+	 * lock.
+	 *
+	 * All other functions will take the read lock, so that they don't have to
+	 * worry about another thread coming along and terminating the display.
+	 */
+	pthread_rwlock_t init_lock;
+
     /**
      * All of the existing EplSurface structs.
      */
@@ -164,11 +173,6 @@ typedef struct
     pthread_rwlock_t surface_list_lock;
 
     /**
-     * A mutex to control access to the display. This is a recursive mutex.
-     */
-    pthread_mutex_t mutex;
-
-    /**
      * True if this display was created with EGL_TRACK_REFERENCES set.
      */
     EGLBoolean track_references;
@@ -179,14 +183,6 @@ typedef struct
      * capped at 1.
      */
     unsigned int init_count;
-
-    /**
-     * This is a counter to keep track of whether the display is in use or not.
-     *
-     * If the app calls eglTerminate, then we defer the termination until the
-     * display is no longer in use.
-     */
-    unsigned int use_count;
 
     /// The major version number for eglInitialize in this context.
     EGLint major;
@@ -329,23 +325,6 @@ EGLDisplay eplGetCurrentDisplay(void);
  * Releases a display acquired with eplDisplayAcquire.
  */
 void eplDisplayRelease(EplDisplay *pdpy);
-
-/**
- * Unlocks the mutex for an EplDisplay, but does not decrement the reference
- * count.
- *
- * This allows a platform library to temporarily release the mutex for an
- * EplDisplay, but ensures that the EplDisplay itself sticks around.
- *
- * The caller must call eplDisplayLock to lock the mutex again before calling
- * eplDisplayRelease.
- */
-void eplDisplayUnlock(EplDisplay *pdpy);
-
-/**
- * Re-locks the mutex for an EplDisplay.
- */
-void eplDisplayLock(EplDisplay *pdpy);
 
 /**
  * Looks up an internal EGLDisplay. If an EplInternalDisplay struct doesn't
