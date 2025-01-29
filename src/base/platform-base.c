@@ -323,10 +323,11 @@ EplDisplay *eplDisplayAcquire(EGLDisplay edpy)
     return pdpy;
 }
 
-EGLDisplay eplGetCurrentDisplay(void)
+void eplGetCurrentSurface(EGLDisplay *ret_edpy, EGLSurface *ret_esurf)
 {
     EplPlatformData *plat;
     EGLDisplay edpy = EGL_NO_DISPLAY;
+    EGLSurface esurf = EGL_NO_SURFACE;
 
     /*
      * In practice, loadEGLExternalPlatform is only ever going to get called
@@ -343,12 +344,20 @@ EGLDisplay eplGetCurrentDisplay(void)
         edpy = plat->egl.GetCurrentDisplay();
         if (edpy != EGL_NO_DISPLAY)
         {
+            esurf = plat->egl.GetCurrentSurface(EGL_DRAW);
             break;
         }
     }
     pthread_mutex_unlock(&platform_data_list_mutex);
 
-    return edpy;
+    if (ret_edpy != NULL)
+    {
+        *ret_edpy = edpy;
+    }
+    if (ret_esurf != NULL)
+    {
+        *ret_esurf = esurf;
+    }
 }
 
 static void DestroyAllSurfaces(EplDisplay *pdpy)
@@ -1137,24 +1146,23 @@ static EGLBoolean HookSwapBuffers(EGLDisplay edpy, EGLSurface esurf)
 
 static EGLBoolean HookWaitGL(void)
 {
-    EGLDisplay edpy = eplGetCurrentDisplay();
-    EplDisplay *pdpy = eplDisplayAcquire(edpy);
+    EGLDisplay edpy = EGL_NO_DISPLAY;
+    EGLDisplay esurf = EGL_NO_SURFACE;
+    EplDisplay *pdpy = NULL;
+    EplSurface *psurf = NULL;
     EGLBoolean ret = EGL_FALSE;
 
-    if (pdpy == NULL)
+    eplGetCurrentSurface(&edpy, &esurf);
+
+    if (!eplHookDisplaySurface(edpy, esurf, &pdpy, &psurf))
     {
         return EGL_FALSE;
     }
 
-
     assert(pdpy->platform->impl->WaitGL != NULL);
     if (pdpy->platform->impl->WaitGL != NULL)
     {
-        const struct glvnd_list *surface_list = eplDisplayLockSurfaceList(pdpy);
-        EplSurface *psurf = eplSurfaceListLookup(surface_list, pdpy->platform->egl.GetCurrentSurface(EGL_DRAW));
-
         ret = pdpy->platform->impl->WaitGL(pdpy, psurf);
-        eplDisplayUnlockSurfaceList(pdpy);
     }
     else
     {
@@ -1164,17 +1172,20 @@ static EGLBoolean HookWaitGL(void)
         eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Internal error: eglWaitGL hook should not be called");
     }
 
-    eplDisplayRelease(pdpy);
+    eplHookDisplaySurfaceEnd(pdpy, psurf);
     return ret;
 }
 
 static EGLBoolean HookWaitNative(void)
 {
-    EGLDisplay edpy = eplGetCurrentDisplay();
-    EplDisplay *pdpy = eplDisplayAcquire(edpy);
+    EGLDisplay edpy = EGL_NO_DISPLAY;
+    EGLDisplay esurf = EGL_NO_SURFACE;
+    EplDisplay *pdpy = NULL;
+    EplSurface *psurf = NULL;
     EGLBoolean ret = EGL_FALSE;
 
-    if (pdpy == NULL)
+    eplGetCurrentSurface(&edpy, &esurf);
+    if (!eplHookDisplaySurface(edpy, esurf, &pdpy, &psurf))
     {
         return EGL_FALSE;
     }
@@ -1182,18 +1193,14 @@ static EGLBoolean HookWaitNative(void)
     assert(pdpy->platform->impl->WaitNative != NULL);
     if (pdpy->platform->impl->WaitNative != NULL)
     {
-        const struct glvnd_list *surface_list = eplDisplayLockSurfaceList(pdpy);
-        EplSurface *psurf = eplSurfaceListLookup(surface_list, pdpy->platform->egl.GetCurrentSurface(EGL_DRAW));
-
         ret = pdpy->platform->impl->WaitNative(pdpy, psurf);
-        eplDisplayUnlockSurfaceList(pdpy);
     }
     else
     {
         eplSetError(pdpy->platform, EGL_BAD_ALLOC, "Internal error: eglWaitNative hook should not be called");
     }
 
-    eplDisplayRelease(pdpy);
+    eplHookDisplaySurfaceEnd(pdpy, psurf);
     return ret;
 }
 

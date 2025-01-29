@@ -317,9 +317,13 @@ void eplPlatformBaseInitFail(EplPlatformData *plat);
 EplDisplay *eplDisplayAcquire(EGLDisplay edpy);
 
 /**
- * Returns the current EGLDisplay for the current thread.
+ * Returns the current external EGLDisplay and EGLSurface handles for the
+ * calling thread.
+ *
+ * \param[out] ret_edpy Returns the current external EGLDisplay
+ * \param[out] ret_esurf Returns the current external EGLSurface
  */
-EGLDisplay eplGetCurrentDisplay(void);
+void eplGetCurrentSurface(EGLDisplay *ret_edpy, EGLSurface *ret_esurf);
 
 /**
  * Releases a display acquired with eplDisplayAcquire.
