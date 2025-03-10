@@ -129,6 +129,16 @@ struct _EplImplPlatform
                           uint32_t flags);
     } drm;
 
+    struct
+    {
+        struct gbm_bo * (* bo_create_with_modifiers2) (struct gbm_device *gbm,
+                uint32_t width, uint32_t height,
+                uint32_t format,
+                const uint64_t *modifiers,
+                const unsigned int count,
+                uint32_t flags);
+    } gbm;
+
     EGLBoolean timeline_funcs_supported;
 };
 

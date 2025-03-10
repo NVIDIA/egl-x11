@@ -12,7 +12,7 @@ Building and Installing
 
 This library depends on:
 - libxcb, libxcb-present, and libxcb-dri3, version 1.17.0
-- libgbm, version 21.3.0
+- libgbm, version 21.2.0
 - libdrm, version 2.4.99
 - libx11 (only if building the xlib library)
 - EGL headers

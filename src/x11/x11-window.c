@@ -362,7 +362,7 @@ static X11ColorBuffer *AllocOneColorBuffer(X11DisplayInstance *inst,
     glvnd_list_init(&buffer->entry);
     buffer->fd = -1;
 
-    buffer->gbo = gbm_bo_create_with_modifiers2(inst->gbmdev,
+    buffer->gbo = inst->platform->priv->gbm.bo_create_with_modifiers2(inst->gbmdev,
             width, height, fmt->fourcc, modifiers, num_modifiers, flags);
 
     if (buffer->gbo == NULL)
