@@ -90,7 +90,7 @@ static EGLPlatformColorBufferNVX AllocInternalBuffer(X11DisplayInstance *inst,
     struct gbm_bo *gbo = NULL;
     int fd = -1;
 
-    gbo = gbm_bo_create_with_modifiers2(inst->gbmdev,
+    gbo = inst->platform->priv->gbm.bo_create_with_modifiers2(inst->gbmdev,
             width, height, fmt->fourcc, fmt->modifiers, fmt->num_modifiers, 0);
     if (gbo == NULL)
     {

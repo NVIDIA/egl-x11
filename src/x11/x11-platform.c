@@ -127,6 +127,16 @@ static EGLBoolean LoadProcHelper(EplPlatformData *plat, void *handle, void **ptr
     return EGL_TRUE;
 }
 
+static struct gbm_bo *fallback_gbo_create_with_modifiers2(struct gbm_device *gbm,
+        uint32_t width, uint32_t height,
+        uint32_t format,
+        const uint64_t *modifiers,
+        const unsigned int count,
+        uint32_t flags)
+{
+    return gbm_bo_create_with_modifiers(gbm, width, height, format, modifiers, count);
+}
+
 EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
         const EGLExtDriver *driver, EGLExtPlatform *extplatform,
         EGLint platform_enum)
@@ -135,9 +145,15 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
     EGLBoolean timelineSupported = EGL_TRUE;
     pfn_eglPlatformGetVersionNVX ptr_eglPlatformGetVersionNVX;
 
-    // Before we do anything else, make sure that we've got a recent enough
-    // version of libgbm.
-    if (dlsym(RTLD_DEFAULT, "gbm_bo_create_with_modifiers2") == NULL)
+    /*
+     * Before we do anything else, make sure that we've got a recent enough
+     * version of libgbm. The most recent thing we depend on is
+     * GBM_BO_IMPORT_FD_MODIFIER, which we can't check directly.
+     *
+     * But, gbm_bo_get_bpp was added at about the same time, so we can check
+     * for that instead.
+     */
+    if (dlsym(RTLD_DEFAULT, "gbm_bo_get_bpp") == NULL)
     {
         return EGL_FALSE;
     }
@@ -225,6 +241,14 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
     plat->priv->timeline_funcs_supported = timelineSupported;
 
 #undef LOAD_PROC
+
+    // Load gbm_bo_create_with_modifiers2 if it's available. If it's not, then
+    // we'll fall back to using gbm_bo_create_with_modifiers.
+    plat->priv->gbm.bo_create_with_modifiers2 = dlsym(RTLD_DEFAULT, "gbm_bo_create_with_modifiers2");
+    if (plat->priv->gbm.bo_create_with_modifiers2 == NULL)
+    {
+        plat->priv->gbm.bo_create_with_modifiers2 = fallback_gbo_create_with_modifiers2;
+    }
 
     eplPlatformBaseInitFinish(plat);
     return EGL_TRUE;
