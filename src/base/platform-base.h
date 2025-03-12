@@ -217,6 +217,7 @@ typedef struct _EplPlatformData
         PFNEGLWAITGLPROC WaitGL;
         PFNEGLWAITCLIENTPROC WaitClient;
         PFNEGLWAITNATIVEPROC WaitNative;
+        PFNEGLSWAPINTERVALPROC SwapInterval;
 
         PFNEGLQUERYDEVICEATTRIBEXTPROC QueryDeviceAttribEXT;
         PFNEGLQUERYDEVICESTRINGEXTPROC QueryDeviceStringEXT;

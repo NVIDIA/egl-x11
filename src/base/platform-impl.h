@@ -290,6 +290,25 @@ typedef struct _EplImplFuncs
      * \return EGL_TRUE on success, EGL_FALSE on failure.
      */
     EGLBoolean (*QueryDisplayAttrib) (EplDisplay *pdpy, EGLint attrib, EGLAttrib *ret_value);
+
+    /**
+     * Implements eglSwapInterval.
+     *
+     * This is only called if the current EGLSurface belongs to the platform
+     * library. If the current EGLSurface does not belong to the platform
+     * library (e.g., a pbuffer or stream), then the base library will pass the
+     * call through to the driver.
+     *
+     * This function is optional. If it's NULL, then the base library will not
+     * provide a hook function eglSwapInterval, and so the driver will follow its
+     * default behavior.
+     *
+     * \param pdpy The current display.
+     * \param psurf The current draw surface. This will never be NULL.
+     * \param interval The new swap interval.
+     * \return EGL_TRUE on success, or EGL_FALSE on failure.
+     */
+    EGLBoolean (* SwapInterval) (EplDisplay *pdpy, EplSurface *psurf, EGLint interval);
 } EplImplFuncs;
 
 #ifdef __cplusplus

@@ -130,6 +130,7 @@ EplPlatformData *eplPlatformBaseAllocate(int major, int minor,
     platform->egl.MakeCurrent = driver->getProcAddress("eglMakeCurrent");
     platform->egl.WaitGL = driver->getProcAddress("eglWaitGL");
     platform->egl.WaitNative = driver->getProcAddress("eglWaitNative");
+    platform->egl.SwapInterval = driver->getProcAddress("eglSwapInterval");
     platform->egl.WaitClient = driver->getProcAddress("eglWaitClient");
     platform->egl.ChooseConfig = driver->getProcAddress("eglChooseConfig");
     platform->egl.GetConfigAttrib = driver->getProcAddress("eglGetConfigAttrib");
@@ -1238,6 +1239,62 @@ static EGLBoolean HookQueryDisplayAttrib(EGLDisplay edpy, EGLint attribute, EGLA
     return ret;
 }
 
+static EGLBoolean HookSwapInterval(EGLDisplay edpy, EGLint interval)
+{
+    EplDisplay *pdpy = NULL;
+    EGLBoolean ret = EGL_FALSE;
+    EGLDisplay internal_edpy = EGL_NO_DISPLAY;
+    PFNEGLSWAPINTERVALPROC SwapInterval = NULL;
+
+    pdpy = eplDisplayAcquire(edpy);
+    if (pdpy == NULL)
+    {
+        return EGL_FALSE;
+    }
+
+    if (pdpy->platform->egl.GetCurrentDisplay() == edpy)
+    {
+        EGLSurface esurf = pdpy->platform->egl.GetCurrentSurface(EGL_DRAW);
+        const struct glvnd_list *surface_list = eplDisplayLockSurfaceList(pdpy);
+        EplSurface *psurf = eplSurfaceListLookup(surface_list, esurf);
+        if (psurf != NULL)
+        {
+            if (pdpy->platform->impl->SwapInterval != NULL)
+            {
+                ret = pdpy->platform->impl->SwapInterval(pdpy, psurf, interval);
+            }
+            else
+            {
+                // This should never happen: If we don't have a SwapInterval
+                // implementation, then we shouldn't have provided an
+                // eglSwapInterval hook to the driver.
+                assert(!"Can't happen -- no SwapInterval implementation");
+                ret = EGL_TRUE;
+            }
+        }
+        else
+        {
+            // If we don't recognize he current EGLSurface, then we'll just
+            // pass the call through to the driver after we unlock everything.
+            internal_edpy = pdpy->internal_display;
+            SwapInterval = pdpy->platform->egl.SwapInterval;
+        }
+        eplDisplayUnlockSurfaceList(pdpy);
+    }
+    else
+    {
+        eplSetError(pdpy->platform, EGL_BAD_SURFACE, "EGLDisplay %p is not current", edpy);
+    }
+
+    if (SwapInterval != NULL)
+    {
+        ret = SwapInterval(internal_edpy, interval);
+    }
+
+    eplDisplayRelease(pdpy);
+    return ret;
+}
+
 static const EplHookFunc BASE_HOOK_FUNCTIONS[] =
 {
     { "eglCreatePbufferSurface", HookCreatePbufferSurface },
@@ -1284,6 +1341,10 @@ void *eplGetHookAddressExport(void *platformData, const char *name)
     if (plat->impl->WaitNative != NULL && strcmp(name, "eglWaitNative") == 0)
     {
         return HookWaitNative;
+    }
+    if (plat->impl->SwapInterval != NULL && strcmp(name, "eglSwapInterval") == 0)
+    {
+        return HookSwapInterval;
     }
     return NULL;
 }
