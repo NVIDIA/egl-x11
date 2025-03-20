@@ -1611,14 +1611,14 @@ static EGLBoolean SyncRendering(EplDisplay *pdpy, EplSurface *surf, X11ColorBuff
         return EGL_TRUE;
     }
 
-    pwin->inst->platform->priv->egl.Flush();
-
     sync = pwin->inst->platform->priv->egl.CreateSync(pwin->inst->internal_display->edpy,
             EGL_SYNC_NATIVE_FENCE_ANDROID, NULL);
     if (sync == EGL_NO_SYNC)
     {
         goto done;
     }
+
+    pwin->inst->platform->priv->egl.Flush();
 
     syncFd = pwin->inst->platform->priv->egl.DupNativeFenceFDANDROID(pwin->inst->internal_display->edpy, sync);
     if (syncFd < 0)
