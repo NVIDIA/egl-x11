@@ -2382,7 +2382,7 @@ EGLBoolean eplX11SwapInterval(EGLDisplay edpy, EGLint interval)
         {
             // If we don't recognize he current EGLSurface, then just pass the
             // call through to the driver.
-            ret = pdpy->platform->priv->egl.SwapInterval(edpy, interval);
+            ret = pdpy->platform->priv->egl.SwapInterval(pdpy->internal_display, interval);
         }
     }
     else
