@@ -276,6 +276,23 @@ typedef struct _EplImplFuncs
      * \return EGL_TRUE on success, EGL_FALSE on failure.
      */
     EGLBoolean (*WaitNative) (EplDisplay *pdpy, EplSurface *psurf);
+
+    /**
+     * Implements eglQueryDisplayAttribKHR/EXT/NV.
+     *
+     * This function is optional, if it's NULL, then the base library will
+     * handle any attributes that it implements internally, and forward the
+     * rest to the driver.
+     *
+     * If the platform doesn't recognize \p attrib, then it should forward the
+     * function to the driver.
+     *
+     * \param pdpy The EplDisplay struct
+     * \param attrib The attribute to look up.
+     * \param[out] value Returns the value of the attribute.
+     * \return EGL_TRUE on success, EGL_FALSE on failure.
+     */
+    EGLBoolean (*QueryDisplayAttrib) (EplDisplay *pdpy, EGLint attrib, EGLAttrib *ret_value);
 } EplImplFuncs;
 
 #ifdef __cplusplus
