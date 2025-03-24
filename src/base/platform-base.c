@@ -1163,6 +1163,40 @@ static EGLBoolean HookWaitNative(void)
     return ret;
 }
 
+static EGLBoolean HookQueryDisplayAttrib(EGLDisplay edpy, EGLint attribute, EGLAttrib *value)
+{
+    EplDisplay *pdpy = eplDisplayAcquire(edpy);
+    EGLBoolean ret = EGL_FALSE;
+
+    if (pdpy == NULL)
+    {
+        return EGL_FALSE;
+    }
+    if (value == NULL)
+    {
+        eplSetError(pdpy->platform, EGL_BAD_PARAMETER, "value pointer must not be NULL");
+        eplDisplayRelease(pdpy);
+        return EGL_FALSE;
+    }
+
+    if (attribute == EGL_TRACK_REFERENCES_KHR)
+    {
+        *value = (EGLAttrib) pdpy->track_references;
+        ret = EGL_TRUE;
+    }
+    else if (pdpy->platform->impl->QueryDisplayAttrib != NULL)
+    {
+        ret = pdpy->platform->impl->QueryDisplayAttrib(pdpy, attribute, value);
+    }
+    else
+    {
+        ret = pdpy->platform->egl.QueryDisplayAttribEXT(pdpy->internal_display, attribute, value);
+    }
+
+    eplDisplayRelease(pdpy);
+    return ret;
+}
+
 static const EplHookFunc BASE_HOOK_FUNCTIONS[] =
 {
     { "eglCreatePbufferSurface", HookCreatePbufferSurface },
@@ -1172,6 +1206,9 @@ static const EplHookFunc BASE_HOOK_FUNCTIONS[] =
     { "eglCreateWindowSurface", HookCreateWindowSurface },
     { "eglDestroySurface", HookDestroySurface },
     { "eglInitialize", HookInitialize },
+    { "eglQueryDisplayAttribEXT", HookQueryDisplayAttrib },
+    { "eglQueryDisplayAttribKHR", HookQueryDisplayAttrib },
+    { "eglQueryDisplayAttribNV", HookQueryDisplayAttrib },
     { "eglSwapBuffers", HookSwapBuffers },
     { "eglSwapBuffersWithDamageEXT", HookSwapBuffersWithDamage },
     { "eglSwapBuffersWithDamageKHR", HookSwapBuffersWithDamage },
