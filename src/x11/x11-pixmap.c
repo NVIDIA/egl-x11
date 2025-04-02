@@ -401,11 +401,12 @@ void eplX11DestroyPixmap(EplSurface *surf)
     }
 }
 
-static EGLBoolean CheckExistingPixmap(EplDisplay *pdpy, xcb_pixmap_t xpix)
+static EGLBoolean CheckExistingPixmap(EplDisplay *pdpy, xcb_pixmap_t xpix,
+        const struct glvnd_list *existing_surfaces)
 {
     EplSurface *psurf;
 
-    glvnd_list_for_each_entry(psurf, &pdpy->surface_list, entry)
+    glvnd_list_for_each_entry(psurf, existing_surfaces, entry)
     {
         if (psurf->type == EPL_SURFACE_TYPE_PIXMAP)
         {
@@ -423,7 +424,8 @@ static EGLBoolean CheckExistingPixmap(EplDisplay *pdpy, xcb_pixmap_t xpix)
 }
 
 EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *surf,
-        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform)
+        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+        const struct glvnd_list *existing_surfaces)
 {
     X11DisplayInstance *inst = pdpy->priv->inst;
     xcb_pixmap_t xpix = eplX11GetNativeXID(pdpy, native_surface, create_platform);
@@ -449,7 +451,7 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
         eplSetError(plat, EGL_BAD_NATIVE_PIXMAP, "Invalid native pixmap %p\n", native_surface);
         return EGL_NO_SURFACE;
     }
-    if (!CheckExistingPixmap(pdpy, xpix))
+    if (!CheckExistingPixmap(pdpy, xpix, existing_surfaces))
     {
         return EGL_NO_SURFACE;
     }
