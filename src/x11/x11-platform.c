@@ -76,17 +76,15 @@ static EGLBoolean eplX11GetPlatformDisplay(EplPlatformData *plat, EplDisplay *pd
         struct glvnd_list *existing_displays);
 static EGLBoolean eplX11InitializeDisplay(EplPlatformData *plat, EplDisplay *pdpy, EGLint *major, EGLint *minor);
 static void eplX11TerminateDisplay(EplPlatformData *plat, EplDisplay *pdpy);
-static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf);
-static void eplX11FreeSurface(EplDisplay *pdpy, EplSurface *surf);
+static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf,
+        const struct glvnd_list *existing_surfaces);
 static EGLBoolean eplX11WaitGL(EplDisplay *pdpy, EplSurface *psurf);
-static EGLBoolean eplX11HookQuerySurface(EGLDisplay edpy, EGLSurface esurf, EGLint attribute, EGLint *value);
+static EplQueryResult eplX11QuerySurface(EplDisplay *pdpy, EplSurface *psurf, EGLint attrib, EGLint *ret_value);
 
 static const EplHookFunc X11_HOOK_FUNCTIONS[] =
 {
     { "eglChooseConfig", eplX11HookChooseConfig },
     { "eglGetConfigAttrib", eplX11HookGetConfigAttrib },
-    { "eglQuerySurface", eplX11HookQuerySurface },
-    { "eglSwapInterval", eplX11SwapInterval },
 };
 static const int NUM_X11_HOOK_FUNCTIONS = sizeof(X11_HOOK_FUNCTIONS) / sizeof(X11_HOOK_FUNCTIONS[0]);
 
@@ -103,9 +101,10 @@ static const EplImplFuncs X11_IMPL_FUNCS =
     .CreateWindowSurface = eplX11CreateWindowSurface,
     .CreatePixmapSurface = eplX11CreatePixmapSurface,
     .DestroySurface = eplX11DestroySurface,
-    .FreeSurface = eplX11FreeSurface,
     .SwapBuffers = eplX11SwapBuffers,
     .WaitGL = eplX11WaitGL,
+    .SwapInterval = eplX11SwapInterval,
+    .QuerySurface = eplX11QuerySurface,
 };
 
 /**
@@ -1312,7 +1311,8 @@ static void eplX11TerminateDisplay(EplPlatformData *plat, EplDisplay *pdpy)
     pdpy->priv->inst = NULL;
 }
 
-static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf)
+static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf,
+        const struct glvnd_list *existing_surfaces)
 {
     if (surf->type == EPL_SURFACE_TYPE_WINDOW)
     {
@@ -1325,14 +1325,6 @@ static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf)
     else
     {
         assert(!"Invalid surface type.");
-    }
-}
-
-static void eplX11FreeSurface(EplDisplay *pdpy, EplSurface *surf)
-{
-    if (surf->type == EPL_SURFACE_TYPE_WINDOW)
-    {
-        eplX11FreeWindow(surf);
     }
 }
 
@@ -1551,54 +1543,22 @@ uint32_t eplX11GetNativeXID(EplDisplay *pdpy, void *native_surface, EGLBoolean c
     return xid;
 }
 
-EGLBoolean eplX11HookQuerySurface(EGLDisplay edpy, EGLSurface esurf, EGLint attribute, EGLint *value)
+EplQueryResult eplX11QuerySurface(EplDisplay *pdpy, EplSurface *psurf, EGLint attrib, EGLint *ret_value)
 {
-    EplDisplay *pdpy = NULL;
-    EplSurface *psurf = NULL;
-    EGLBoolean ret = EGL_FALSE;
-
-    pdpy = eplDisplayAcquire(edpy);
-    if (pdpy == NULL)
+    if (attrib == EGL_RENDER_BUFFER)
     {
-        return EGL_FALSE;
-    }
-
-    if (value == NULL)
-    {
-        eplSetError(pdpy->platform, EGL_BAD_ATTRIBUTE, "value pointer must not be NULL");
-        eplDisplayRelease(pdpy);
-        return EGL_FALSE;
-    }
-
-    psurf = eplSurfaceAcquire(pdpy, esurf);
-    if (psurf != NULL)
-    {
-        if (attribute == EGL_RENDER_BUFFER)
+        if (psurf->type == EPL_SURFACE_TYPE_WINDOW)
         {
-            if (psurf->type == EPL_SURFACE_TYPE_WINDOW)
-            {
-                *value = EGL_BACK_BUFFER;
-            }
-            else
-            {
-                *value = EGL_SINGLE_BUFFER;
-            }
-            ret = EGL_TRUE;
+            *ret_value = EGL_BACK_BUFFER;
         }
         else
         {
-            ret = pdpy->platform->priv->egl.QuerySurface(pdpy->internal_display,
-                    psurf->internal_surface, attribute, value);
+            *ret_value = EGL_SINGLE_BUFFER;
         }
-        eplSurfaceRelease(pdpy, psurf);
+        return EPL_QUERY_RESULT_SUCCESS;
     }
     else
     {
-        // If we don't recognize the EGLSurface, then just pass the call
-        // through to the driver.
-        ret = pdpy->platform->priv->egl.QuerySurface(pdpy->internal_display, esurf, attribute, value);
+        return EPL_QUERY_RESULT_UNKNOWN;
     }
-
-    eplDisplayRelease(pdpy);
-    return ret;
 }
