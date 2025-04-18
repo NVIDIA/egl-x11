@@ -14,7 +14,7 @@
 # limitations under the License.
 
 project('egl-x11', 'c',
-  version : '1.0.1',
+  version : '1.0.2',
   default_options : ['c_std=gnu99'],
 )
 
