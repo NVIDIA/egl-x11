@@ -1710,7 +1710,6 @@ static EGLBoolean WaitImplicitFence(EplDisplay *pdpy, X11ColorBuffer *buffer)
     if (fd >= 0)
     {
         success = WaitForSyncFDGPU(pdpy->priv->inst, fd);
-        close(fd);
     }
 
     if (success)
