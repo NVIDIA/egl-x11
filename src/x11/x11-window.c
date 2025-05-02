@@ -1886,10 +1886,13 @@ static EGLBoolean WaitTimelinePoint(X11DisplayInstance *inst, X11Timeline *timel
                     DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT,
                     &first) == 0)
         {
+            success = EGL_TRUE;
+        }
+        else
+        {
             eplSetError(inst->platform, EGL_BAD_ALLOC,
                     "Internal error: drmSyncobjTimelineWait(WAIT_FOR_SUBMIT) failed: %s\n",
                     strerror(errno));
-            success = EGL_TRUE;
         }
     }
 
