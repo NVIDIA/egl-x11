@@ -183,10 +183,13 @@ typedef struct _EplImplFuncs
      * \param create_platform If this is true, then the call is from
      *      eglCreatePlatformWindowSurface. If false, it's from
      *      eglCreateWindowSurface.
+     * \param existing_surfaces A linked list of existing surfaces. The new
+     *      surface will not be in this list.
      * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
      */
     EGLSurface (* CreateWindowSurface) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
-            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+            const struct glvnd_list *existing_surfaces);
 
     /**
      * Creates an EGLSurface for a pixmap.
@@ -202,35 +205,29 @@ typedef struct _EplImplFuncs
      * \param create_platform If this is true, then the call is from
      *      eglCreatePlatformPixmapSurface. If false, it's from
      *      eglCreatePixmapSurface.
+     * \param existing_surfaces A linked list of existing surfaces. The new
+     *      surface will not be in this list.
      * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
      */
     EGLSurface (* CreatePixmapSurface) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
-            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+            const struct glvnd_list *existing_surfaces);
 
     /**
-     * Called to handle eglDestroySurface and eglTerminate.
+     * Called from eglDestroySurface and eglTerminate to destroy a surface.
      *
-     * Note that it's possible that the EplSurface struct itself might stick around
-     * if another thread is holding a reference to it.
+     * After this, the \c EplSurface struct itself is freed.
      *
-     * \c FreeSurface is called when the refcount actually drops to zero.
+     * Note that this function is called with the surface list already locked,
+     * so it must not try to call \c eplDisplayLockSurfaceList.
      *
-     * \param plat The EplPlatformData struct
      * \param pdpy The EplDisplay struct
+     * \param psurf The EplSurface that's being destroyed.
+     * \param existing_surfaces A linked list of existing surfaces. \p psurf
+     *      will not be in this list.
      */
-    void (* DestroySurface) (EplDisplay *pdpy, EplSurface *psurf);
-
-    /**
-     * Called when an EplSurface is about to be freed.
-     *
-     * At this point, it's safe to assume that no other thread is going to touch
-     * the surface, so the platform must free anything that it hasn't already freed
-     * in \c DestroySurface.
-     *
-     * \param plat The EplPlatformData struct
-     * \param pdpy The EplDisplay struct
-     */
-    void (* FreeSurface) (EplDisplay *pdpy, EplSurface *psurf);
+    void (* DestroySurface) (EplDisplay *pdpy, EplSurface *psurf,
+            const struct glvnd_list *existing_surfaces);
 
     /**
      * Implements eglSwapBuffers and eglSwapBuffersWithDamageEXT.
@@ -293,6 +290,25 @@ typedef struct _EplImplFuncs
      * \return EGL_TRUE on success, EGL_FALSE on failure.
      */
     EGLBoolean (*QueryDisplayAttrib) (EplDisplay *pdpy, EGLint attrib, EGLAttrib *ret_value);
+
+    /**
+     * Implements eglSwapInterval.
+     *
+     * This is only called if the current EGLSurface belongs to the platform
+     * library. If the current EGLSurface does not belong to the platform
+     * library (e.g., a pbuffer or stream), then the base library will pass the
+     * call through to the driver.
+     *
+     * This function is optional. If it's NULL, then the base library will not
+     * provide a hook function eglSwapInterval, and so the driver will follow its
+     * default behavior.
+     *
+     * \param pdpy The current display.
+     * \param psurf The current draw surface. This will never be NULL.
+     * \param interval The new swap interval.
+     * \return EGL_TRUE on success, or EGL_FALSE on failure.
+     */
+    EGLBoolean (* SwapInterval) (EplDisplay *pdpy, EplSurface *psurf, EGLint interval);
 } EplImplFuncs;
 
 #ifdef __cplusplus
