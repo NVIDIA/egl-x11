@@ -709,6 +709,21 @@ static void eplX11CleanupDisplay(EplDisplay *pdpy)
     }
 }
 
+static EGLBoolean CheckX11Extension(xcb_connection_t *conn, const char *name)
+{
+    xcb_generic_error_t *error = NULL;
+    xcb_query_extension_reply_t *reply = xcb_query_extension_reply(conn,
+            xcb_query_extension(conn, strlen(name), name), &error);
+    EGLBoolean ret = EGL_FALSE;
+    if (reply != NULL)
+    {
+        ret = (reply->present != 0);
+        free(reply);
+    }
+    free(error);
+    return ret;
+}
+
 /**
  * Checks whether the server has the necessary support that we need.
  *
@@ -727,7 +742,6 @@ static EGLBoolean CheckServerExtensions(X11DisplayInstance *inst)
     xcb_dri3_query_version_reply_t *dri3Reply = NULL;
     xcb_present_query_version_cookie_t presentCookie;
     xcb_present_query_version_reply_t *presentReply = NULL;
-    xcb_query_extension_reply_t *nvglxReply = NULL;
     EGLBoolean success = EGL_FALSE;
 
     // Check to make sure that we're using a domain socket, since we need to be
@@ -765,17 +779,7 @@ static EGLBoolean CheckServerExtensions(X11DisplayInstance *inst)
          * we could add some requests to NV-GLX to support older (pre DRI3 1.2)
          * servers or non-Linux systems.
          */
-        const char NVGLX_EXTENSION_NAME[] = "NV-GLX";
-        xcb_query_extension_cookie_t extCookie = xcb_query_extension(inst->conn,
-                sizeof(NVGLX_EXTENSION_NAME) - 1, NVGLX_EXTENSION_NAME);
-        nvglxReply = xcb_query_extension_reply(inst->conn, extCookie, &error);
-        if (nvglxReply == NULL)
-        {
-            // XQueryExtension isn't supposed to generate any errors.
-            goto done;
-        }
-
-        if (nvglxReply->present)
+        if (CheckX11Extension(inst->conn, "NV-GLX"))
         {
             goto done;
         }
@@ -821,7 +825,6 @@ static EGLBoolean CheckServerExtensions(X11DisplayInstance *inst)
     success = EGL_TRUE;
 
 done:
-    free(nvglxReply);
     free(presentReply);
     free(dri3Reply);
     free(error);
@@ -893,6 +896,7 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
     EplInternalDisplay *internalDpy = NULL;
     EGLBoolean supportsDirect = EGL_FALSE;
     EGLBoolean supportsLinear = EGL_FALSE;
+    const char *env;
 
     inst = calloc(1, sizeof(X11DisplayInstance));
     if (inst == NULL)
@@ -1013,7 +1017,15 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
             return NULL;
         }
 
-        inst->supports_implicit_sync = EGL_FALSE;
+        /*
+         * The NVIDIA driver does not support implicit sync semantics in OpenGL
+         * and similar. However, if the NVIDIA server-side driver module for
+         * Xorg supports DRI3 1.2, then it will will extract and attach fences
+         * from the dma-buf when it processes a PresentPixmap or CopyArea
+         * request, which is all we actually need in order to use our implicit
+         * sync path.
+         */
+        inst->supports_implicit_sync = CheckX11Extension(inst->conn, "NV-GLX");
     }
     else
     {
@@ -1045,6 +1057,19 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
         }
 
         inst->supports_implicit_sync = EGL_TRUE;
+    }
+
+    env = getenv("__NV_X11_FORCE_IMPLICIT_SYNC");
+    if (env != NULL)
+    {
+        if (strcmp(env, "1") == 0)
+        {
+            inst->supports_implicit_sync = EGL_TRUE;
+        }
+        else if (strcmp(env, "0") == 0)
+        {
+            inst->supports_implicit_sync = EGL_FALSE;
+        }
     }
 
     if (inst->device == EGL_NO_DEVICE_EXT)
@@ -1187,6 +1212,15 @@ X11DisplayInstance *eplX11DisplayInstanceCreate(EplDisplay *pdpy, EGLBoolean fro
         uint64_t cap = 0;
         if (pdpy->platform->priv->drm.GetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) != 0
                 || cap == 0)
+        {
+            inst->supports_explicit_sync = EGL_FALSE;
+        }
+    }
+
+    if (inst->supports_explicit_sync)
+    {
+        env = getenv("__NV_X11_DISABLE_EXPLICIT_SYNC");
+        if (env != NULL && atoi(env) != 0)
         {
             inst->supports_explicit_sync = EGL_FALSE;
         }
