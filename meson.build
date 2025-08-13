@@ -21,6 +21,7 @@ project('egl-x11', 'c',
 dep_libdrm = dependency('libdrm')
 dep_threads = dependency('threads')
 dep_eglexternal = dependency('eglexternalplatform', version : ['>=1.2', '<2'])
+dep_egl = dependency('egl', version : ['>=1.5', '<2']).partial_dependency(includes : true, compile_args : true)
 inc_base = include_directories('src/base')
 
 cc = meson.get_compiler('c')

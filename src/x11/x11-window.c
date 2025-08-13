@@ -728,9 +728,45 @@ static EGLBoolean FindSupportedModifiers(X11DisplayInstance *inst,
     return EGL_TRUE;
 }
 
-void eplX11FreeWindow(EplSurface *surf)
+void eplX11DestroyWindow(EplSurface *surf)
 {
     X11Window *pwin = (X11Window *) surf->priv;
+    EGLSurface internalSurf;
+
+    assert(surf->type == EPL_SURFACE_TYPE_WINDOW);
+
+    /*
+     * Lock the surface and increment skip_update_callback. After that, if
+     * another thread tries to call the update callback after this, then
+     * the update callback won't try to call into the driver.
+     */
+    pthread_mutex_lock(&pwin->mutex);
+
+    pwin->skip_update_callback++;
+    internalSurf = surf->internal_surface;
+
+    pthread_mutex_unlock(&pwin->mutex);
+
+    /*
+     * We have to unlock the surface before we call the driver's
+     * eglDestroySurface.
+     *
+     * If another thread tries to call the window update callback for this
+     * surface, then it will be holding a mutex in the driver, and then the
+     * callback will try to lock the surface's mutex.
+     *
+     * If we had the surface locked here, then the driver's eglDestroySurface
+     * implementation would try to take the driver's mutex, which would lead to
+     * a deadlock.
+     */
+    if (internalSurf != EGL_NO_SURFACE)
+    {
+        pwin->inst->platform->egl.DestroySurface(pwin->inst->internal_display->edpy, internalSurf);
+    }
+
+    // After the driver's eglDestroySurface returns, no other threads will call
+    // the update or damage callbacks, so we can finish the rest of our
+    // cleanup.
 
     FreeWindowBuffers(surf);
 
@@ -854,7 +890,7 @@ static EGLBoolean CheckReallocWindow(EplSurface *surf,
         *was_resized = EGL_FALSE;
     }
 
-    if (surf->deleted || pwin->native_destroyed)
+    if (pwin->native_destroyed)
     {
         return EGL_TRUE;
     }
@@ -944,7 +980,7 @@ static void PollForWindowEvents(EplSurface *surf)
 {
     X11Window *pwin = (X11Window *) surf->priv;
 
-    while (!pwin->native_destroyed && !surf->deleted)
+    while (!pwin->native_destroyed)
     {
         xcb_generic_event_t *xcbevt = xcb_poll_for_special_event(pwin->inst->conn, pwin->present_event);
         if (xcbevt == NULL)
@@ -962,20 +998,6 @@ static void WindowUpdateCallback(void *param)
     EplSurface *surf = param;
     X11Window *pwin = (X11Window *) surf->priv;
 
-    /*
-     * Here, we lock the window mutex, but *not* the display mutex.
-     *
-     * We can't lock the display mutex, because we could run into a deadlock:
-     * - Thread A calls an EGL function in the platform library, which locks
-     *   the display. The platform library calls into the driver, which tries to
-     *   take the winsys lock.
-     * - Thread B calls a GL function. The driver takes the winsys lock, then
-     *   calls the window update callback. The window update callback tries to
-     *   take the display lock.
-     *
-     * We can safely access anything in X11DisplayInstance, because that never
-     * changes after it's initialized, and thus we don't need a mutex for it.
-     */
     pthread_mutex_lock(&pwin->mutex);
 
     if (pwin->skip_update_callback != 0)
@@ -1165,7 +1187,7 @@ static void WindowDamageCallback(void *param, int syncfd, unsigned int flags)
 
     // Check for any pending events first.
     PollForWindowEvents(surf);
-    if (pwin->native_destroyed || surf->deleted)
+    if (pwin->native_destroyed)
     {
         goto done;
     }
@@ -1241,11 +1263,12 @@ done:
     pthread_mutex_unlock(&pwin->mutex);
 }
 
-static EGLBoolean CheckExistingWindow(EplDisplay *pdpy, xcb_window_t xwin)
+static EGLBoolean CheckExistingWindow(EplDisplay *pdpy, xcb_window_t xwin,
+        const struct glvnd_list *existing_surfaces)
 {
     EplSurface *psurf;
 
-    glvnd_list_for_each_entry(psurf, &pdpy->surface_list, entry)
+    glvnd_list_for_each_entry(psurf, existing_surfaces, entry)
     {
         if (psurf->type == EPL_SURFACE_TYPE_WINDOW)
         {
@@ -1263,7 +1286,8 @@ static EGLBoolean CheckExistingWindow(EplDisplay *pdpy, xcb_window_t xwin)
 }
 
 EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *surf,
-        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform)
+        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+        const struct glvnd_list *existing_surfaces)
 {
     X11DisplayInstance *inst = pdpy->priv->inst;
     xcb_window_t xwin = eplX11GetNativeXID(pdpy, native_surface, create_platform);
@@ -1291,7 +1315,7 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
         eplSetError(plat, EGL_BAD_NATIVE_WINDOW, "Invalid native window %p\n", native_surface);
         return EGL_NO_SURFACE;
     }
-    if (!CheckExistingWindow(pdpy, xwin))
+    if (!CheckExistingWindow(pdpy, xwin, existing_surfaces))
     {
         return EGL_NO_SURFACE;
     }
@@ -1450,7 +1474,7 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
 done:
     if (esurf == EGL_NO_SURFACE)
     {
-        eplX11FreeWindow(surf);
+        eplX11DestroyWindow(surf);
     }
     free(windowAttribReply);
     free(geomReply);
@@ -1461,66 +1485,13 @@ done:
     return esurf;
 }
 
-void eplX11DestroyWindow(EplSurface *surf)
-{
-    X11Window *pwin = (X11Window *) surf->priv;
-    EGLSurface internalSurf;
-
-    assert(surf->type == EPL_SURFACE_TYPE_WINDOW);
-
-    /*
-     * Lock the surface and increment skip_update_callback. After that, if
-     * another thread tries to call the update callback after this, then
-     * the update callback won't try to call into the driver.
-     */
-    pthread_mutex_lock(&pwin->mutex);
-
-    pwin->skip_update_callback++;
-    internalSurf = surf->internal_surface;
-
-    pthread_mutex_unlock(&pwin->mutex);
-
-    /*
-     * We have to unlock the surface before we call the driver's
-     * eglDestroySurface.
-     *
-     * If another thread tries to call the window update callback for this
-     * surface, then it will be holding a mutex in the driver, and then the
-     * callback will try to lock the surface's mutex.
-     *
-     * If we had the surface locked here, then the driver's eglDestroySurface
-     * implementation would try to take the driver's mutex, which would lead to
-     * a deadlock.
-     */
-    if (internalSurf != EGL_NO_SURFACE)
-    {
-        pwin->inst->platform->egl.DestroySurface(pwin->inst->internal_display->edpy, internalSurf);
-    }
-}
-
 /**
  * Waits for at least one Present event to arrive.
- *
- * This function will unlock the surface and the display while waiting, so the
- * caller must check the EplSurface::deleted flag to check whether another
- * thread destroyed the surface in the meantime.
  */
 static EGLBoolean WaitForWindowEvents(EplDisplay *pdpy, EplSurface *surf)
 {
     X11Window *pwin = (X11Window *) surf->priv;
     xcb_generic_event_t *xcbevt;
-
-    /*
-     * We don't want to block other threads while we wait, so we need to
-     * release our locks.
-     *
-     * The use counter in EplDisplay should prevent the display from
-     * getting terminated out from under us, and the refcount in EplSurface
-     * will ensure that the EplSurface struct itself sticks around.
-     *
-     * It's still possible that the surface will get destroyed by another
-     * thread in the meantime, though, so the caller needs to check for that.
-     */
 
     if (pwin->native_destroyed)
     {
@@ -1530,40 +1501,11 @@ static EGLBoolean WaitForWindowEvents(EplDisplay *pdpy, EplSurface *surf)
          * However, a new enough X server will send a PresentConfigureNotify
          * event with a special flag set to notify the client when that
          * happens.
-         *
-         * Note that even though we unlock the window's mutex before calling
-         * xcb_wait_for_special_event, we should still be safe from race
-         * conditions. This function is only called from eglSwapBuffers, which
-         * means that the window must be current. Thus, only one thread will
-         * ever be here for this window.
-         *
-         * There is still a race condition if the X window gets destroyed
-         * before the server receives the PresentPixmap request, but there's
-         * not much that we can do about that.
          */
         return EGL_TRUE;
     }
-
-    pthread_mutex_unlock(&pwin->mutex);
-    eplDisplayUnlock(pdpy);
 
     xcbevt = xcb_wait_for_special_event(pwin->inst->conn, pwin->present_event);
-
-    eplDisplayLock(pdpy);
-    pthread_mutex_lock(&pwin->mutex);
-
-    // Sanity check: If something called eglTerminate, then that should have
-    // destroyed the surface.
-    assert(pdpy->priv->inst == pwin->inst || surf->deleted);
-
-    if (surf->deleted)
-    {
-        /*
-         * Some other thread came along and called eglDestroySurface or
-         * eglTerminate.
-         */
-        return EGL_TRUE;
-    }
 
     if (xcbevt == NULL)
     {
@@ -1788,26 +1730,10 @@ static int CheckBufferReleaseImplicit(EplDisplay *pdpy, EplSurface *surf,
         }
     }
 
-    // Release the locks while we wait, so that we don't block
-    // other threads.
-    pthread_mutex_unlock(&pwin->mutex);
-    eplDisplayUnlock(pdpy);
-
     ret = poll(fds, count, timeout_ms);
     err = errno;
 
-    eplDisplayLock(pdpy);
-    pthread_mutex_lock(&pwin->mutex);
-
-    if (surf->deleted)
-    {
-        /*
-         * Some other thread came along and called
-         * eglDestroySurface or eglTerminate.
-         */
-        return count;
-    }
-    else if (ret > 0)
+    if (ret > 0)
     {
         for (i=0; i<count; i++)
         {
@@ -1969,11 +1895,6 @@ static int CheckBufferReleaseExplicit(EplDisplay *pdpy, EplSurface *surf,
         timeout = 0;
     }
 
-    // Release the locks while we wait, so that we don't block
-    // other threads.
-    pthread_mutex_unlock(&pwin->mutex);
-    eplDisplayUnlock(pdpy);
-
     ret = pwin->inst->platform->priv->drm.SyncobjTimelineWait(
                 gbm_device_get_fd(pwin->inst->gbmdev),
                 handles, points, count, timeout,
@@ -1981,18 +1902,7 @@ static int CheckBufferReleaseExplicit(EplDisplay *pdpy, EplSurface *surf,
                 &first);
     err = errno;
 
-    eplDisplayLock(pdpy);
-    pthread_mutex_lock(&pwin->mutex);
-
-    if (surf->deleted)
-    {
-        /*
-         * Some other thread came along and called
-         * eglDestroySurface or eglTerminate.
-         */
-        return count;
-    }
-    else if (ret == 0)
+    if (ret == 0)
     {
         assert(first < count);
         if (WaitTimelinePoint(pwin->inst, &buffers[first]->timeline))
@@ -2076,7 +1986,7 @@ static X11ColorBuffer *GetFreeBuffer(EplDisplay *pdpy, EplSurface *surf,
         }
     }
 
-    while (!surf->deleted && !pwin->native_destroyed)
+    while (!pwin->native_destroyed)
     {
         X11ColorBuffer *buffer = NULL;
         int numBuffers = 0;
@@ -2171,12 +2081,7 @@ static X11ColorBuffer *GetFreeBuffer(EplDisplay *pdpy, EplSurface *surf,
 static EGLBoolean CheckWindowDeleted(EplSurface *surf, EGLBoolean *ret_success)
 {
     X11Window *pwin = (X11Window *) surf->priv;
-    if (surf->deleted)
-    {
-        *ret_success = EGL_TRUE;
-        return EGL_TRUE;
-    }
-    else if (pwin->native_destroyed)
+    if (pwin->native_destroyed)
     {
         *ret_success = EGL_FALSE;
         eplSetError(pwin->inst->platform, EGL_BAD_NATIVE_WINDOW, "The X11 window has been destroyed");
@@ -2351,50 +2256,23 @@ done:
     return ret;
 }
 
-EGLBoolean eplX11SwapInterval(EGLDisplay edpy, EGLint interval)
+EGLBoolean eplX11SwapInterval(EplDisplay *pdpy, EplSurface *psurf, EGLint interval)
 {
-    EplDisplay *pdpy = eplDisplayAcquire(edpy);
-    EGLSurface esurf;
-    EGLBoolean ret = EGL_FALSE;
-
-    if (pdpy == NULL)
+    if (psurf->type == EPL_SURFACE_TYPE_WINDOW)
     {
-        return EGL_FALSE;
-    }
+        X11Window *pwin = (X11Window *) psurf->priv;
 
-    esurf = pdpy->platform->egl.GetCurrentSurface(EGL_DRAW);
-    if (esurf != EGL_NO_SURFACE)
-    {
-        EplSurface *psurf = eplSurfaceAcquire(pdpy, esurf);
-        if (psurf != NULL)
+        if (interval < 0)
         {
-            if (psurf->type == EPL_SURFACE_TYPE_WINDOW)
-            {
-                X11Window *pwin = (X11Window *) psurf->priv;
-                pwin->swap_interval = interval;
-                if (pwin->swap_interval < 0)
-                {
-                    pwin->swap_interval = 0;
-                }
-            }
-            eplSurfaceRelease(pdpy, psurf);
-            ret = EGL_TRUE;
+            interval = 0;
         }
-        else
-        {
-            // If we don't recognize he current EGLSurface, then just pass the
-            // call through to the driver.
-            ret = pdpy->platform->priv->egl.SwapInterval(pdpy->internal_display, interval);
-        }
-    }
-    else
-    {
-        eplSetError(pdpy->platform, EGL_BAD_SURFACE, "eglSwapInterval called without a current EGLSurface");
+
+        pthread_mutex_lock(&pwin->mutex);
+        pwin->swap_interval = interval;
+        pthread_mutex_unlock(&pwin->mutex);
     }
 
-    eplDisplayRelease(pdpy);
-
-    return ret;
+    return EGL_TRUE;
 }
 
 EGLBoolean eplX11WaitGLWindow(EplDisplay *pdpy, EplSurface *psurf)
@@ -2402,7 +2280,7 @@ EGLBoolean eplX11WaitGLWindow(EplDisplay *pdpy, EplSurface *psurf)
     X11Window *pwin = (X11Window *) psurf->priv;
 
     while ((pwin->last_present_serial - pwin->last_complete_serial) > 0
-            && !psurf->deleted && !pwin->native_destroyed)
+            && !pwin->native_destroyed)
     {
         if (!WaitForWindowEvents(pdpy, psurf))
         {

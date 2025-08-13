@@ -79,13 +79,9 @@ typedef struct
  */
 typedef struct
 {
-    EplRefCount refcount;
-
     EGLSurface external_surface;
     EGLSurface internal_surface;
     EplSurfaceType type;
-
-    EGLBoolean deleted;
 
     /**
      * Private data used by the implementation.
@@ -140,11 +136,6 @@ typedef struct
     struct _EplPlatformData *platform;
 
     /**
-     * All of the existing EplSurface structs.
-     */
-    struct glvnd_list surface_list;
-
-    /**
      * Private data for the implementation.
      */
     EplImplDisplay *priv;
@@ -152,10 +143,34 @@ typedef struct
     // Everything after this in EplDisplay should be treated as internal to
     // platform-base.c.
 
+	/**
+	 * A read/write lock to protect against concurrent calls to eglTerminate.
+	 *
+	 * eglInitialize, eglTerminate, and library teardown will all take the read
+	 * lock.
+	 *
+	 * All other functions will take the read lock, so that they don't have to
+	 * worry about another thread coming along and terminating the display.
+	 */
+	pthread_rwlock_t init_lock;
+
     /**
-     * A mutex to control access to the display. This is a recursive mutex.
+     * All of the existing EplSurface structs.
      */
-    pthread_mutex_t mutex;
+    struct glvnd_list surface_list;
+
+    /**
+     * A read/write lock to protect the surface list.
+     *
+     * The eglCreate*Surface and eglDestroySurface hooks will hold the write
+     * lock, and any other functions that operate on an EGLSurface a will hold
+     * the read lock.
+     *
+     * This allows most functions (especially eglSwapBuffers, which may have to
+     * block for extended periods of time) to run concurrently, without needing
+     * to worry about the EGLSurface getting destroyed out from under it.
+     */
+    pthread_rwlock_t surface_list_lock;
 
     /**
      * True if this display was created with EGL_TRACK_REFERENCES set.
@@ -168,14 +183,6 @@ typedef struct
      * capped at 1.
      */
     unsigned int init_count;
-
-    /**
-     * This is a counter to keep track of whether the display is in use or not.
-     *
-     * If the app calls eglTerminate, then we defer the termination until the
-     * display is no longer in use.
-     */
-    unsigned int use_count;
 
     /// The major version number for eglInitialize in this context.
     EGLint major;
@@ -210,6 +217,7 @@ typedef struct _EplPlatformData
         PFNEGLWAITGLPROC WaitGL;
         PFNEGLWAITCLIENTPROC WaitClient;
         PFNEGLWAITNATIVEPROC WaitNative;
+        PFNEGLSWAPINTERVALPROC SwapInterval;
 
         PFNEGLQUERYDEVICEATTRIBEXTPROC QueryDeviceAttribEXT;
         PFNEGLQUERYDEVICESTRINGEXTPROC QueryDeviceStringEXT;
@@ -310,31 +318,18 @@ void eplPlatformBaseInitFail(EplPlatformData *plat);
 EplDisplay *eplDisplayAcquire(EGLDisplay edpy);
 
 /**
- * Returns the current EGLDisplay for the current thread.
+ * Returns the current external EGLDisplay and EGLSurface handles for the
+ * calling thread.
+ *
+ * \param[out] ret_edpy Returns the current external EGLDisplay
+ * \param[out] ret_esurf Returns the current external EGLSurface
  */
-EGLDisplay eplGetCurrentDisplay(void);
+void eplGetCurrentSurface(EGLDisplay *ret_edpy, EGLSurface *ret_esurf);
 
 /**
  * Releases a display acquired with eplDisplayAcquire.
  */
 void eplDisplayRelease(EplDisplay *pdpy);
-
-/**
- * Unlocks the mutex for an EplDisplay, but does not decrement the reference
- * count.
- *
- * This allows a platform library to temporarily release the mutex for an
- * EplDisplay, but ensures that the EplDisplay itself sticks around.
- *
- * The caller must call eplDisplayLock to lock the mutex again before calling
- * eplDisplayRelease.
- */
-void eplDisplayUnlock(EplDisplay *pdpy);
-
-/**
- * Re-locks the mutex for an EplDisplay.
- */
-void eplDisplayLock(EplDisplay *pdpy);
 
 /**
  * Looks up an internal EGLDisplay. If an EplInternalDisplay struct doesn't
@@ -367,20 +362,59 @@ EGLBoolean eplTerminateInternalDisplay(EplPlatformData *platform, EplInternalDis
 void eplSetError(EplPlatformData *platform, EGLint error, const char *fmt, ...);
 
 /**
- * Looks up the EplSurface struct for a surface.
+ * Returns the display's surface list.
  *
- * This will lock the surface and increment its refcount.
+ * This will take the read lock for the surface list, and then return the list
+ * head.
  *
- * The caller must release the surface with \c eplSurfaceRelease.
- *
- * Note that this might return NULL if the surface is a pbuffer or stream.
+ * The caller must call eplDisplayUnlockSurfaceList to unlock the surface list
+ * afterward.
  */
-EplSurface *eplSurfaceAcquire(EplDisplay *pdpy, EGLSurface esurf);
+const struct glvnd_list *eplDisplayLockSurfaceList(EplDisplay *pdpy);
 
 /**
- * Decrements the refcount for an EplSurface and unlocks it.
+ * Unlocks the display's surface list.
  */
-void eplSurfaceRelease(EplDisplay *pdpy, EplSurface *psurf);
+void eplDisplayUnlockSurfaceList(EplDisplay *pdpy);
+
+/**
+ * A convenience function for hooks that operate on an EGLSurface.
+ *
+ * This function just calls eglDisplayAcquire to look up the EplDisplay, and
+ * then eplDisplayLockSurfaceList and eplSurfaceListLookup to look up an
+ * EplSurface.
+ *
+ * The caller must then call \c eplHookDisplaySurfaceEnd afterward.
+ *
+ * \note If \p esurf is not NULL, but doesn't match any EplSurface struct, then
+ * this function will still succeed. In most cases, that just means that the
+ * hook function should pass it through to the driver.
+ *
+ * \note If \p ret_psurf returns NULL, then the surface list will be left
+ * unlocked.
+ *
+ * \param edpy The external EGLDisplay handle.
+ * \param esurf The external EGLSurface handle.
+ * \param[out] ret_pdpy Returns the EplDisplay pointer.
+ * \param[out] ret_psurf Returns the EplSurface pointer, or NULL if \p esurf
+ *      doesn't match any EplDisplay.
+ * \return EGL_TRUE on success. EGL_FALSE if \p edpy is invalid, or if
+ *      \p esurf is EGL_NO_SURFACE.
+ */
+EGLBoolean eplHookDisplaySurface(EGLDisplay edpy, EGLSurface esurf,
+        EplDisplay **ret_pdpy, EplSurface **ret_surface);
+
+void eplHookDisplaySurfaceEnd(EplDisplay *pdpy, const EplSurface *psurf);
+
+/**
+ * Looks up an EplSurface from its external EGLSurface handle.
+ *
+ * \param surface_list The surface list, as returned by \c eplDisplayLockSurfaceList.
+ * \param esurf The external EGLSurface handle.
+ * \return The corresponding EplSurface, or NULL if \p esurf doesn't match any
+ *      surface.
+ */
+EplSurface *eplSurfaceListLookup(const struct glvnd_list *surface_list, EGLSurface esurf);
 
 /**
  * Replaces the current surface.

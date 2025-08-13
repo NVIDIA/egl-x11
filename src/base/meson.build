@@ -24,6 +24,7 @@ platform_base = static_library('platform-base',
     dep_libdrm.partial_dependency(compile_args : true, includes : true),
     dep_threads,
     dep_eglexternal,
+    dep_egl,
   ],
   gnu_symbol_visibility: 'hidden',
   install: false)
