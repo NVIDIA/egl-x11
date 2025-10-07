@@ -436,7 +436,7 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     EGLSurface esurf = EGL_NO_SURFACE;
     EGLAttrib buffers[] =
     {
-        GL_BACK, 0,
+        GL_FRONT, 0,
         EGL_PLATFORM_SURFACE_BLIT_TARGET_NVX, 0,
         EGL_PLATFORM_SURFACE_DAMAGE_CALLBACK_NVX, (EGLAttrib) PixmapDamageCallback,
         EGL_PLATFORM_SURFACE_DAMAGE_CALLBACK_PARAM_NVX, (EGLAttrib) surf,
