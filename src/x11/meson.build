@@ -19,6 +19,7 @@ dep_x11_xcb = dependency('x11-xcb', required: get_option('xlib'))
 dep_xcb = dependency('xcb')
 dep_xcb_present = dependency('xcb-present')
 dep_xcb_dri3 = dependency('xcb-dri3')
+dep_xcb_glx = dependency('xcb-glx')
 dep_dl = meson.get_compiler('c').find_library('dl', required : false)
 
 enable_xlib = (get_option('xlib').allowed() and dep_x11.found() and dep_x11_xcb.found())
@@ -30,6 +31,7 @@ x11_deps = [
   dep_xcb,
   dep_xcb_present,
   dep_xcb_dri3,
+  dep_xcb_glx,
   dep_dl,
 ]
 

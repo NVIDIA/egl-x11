@@ -27,6 +27,7 @@
 
 #include <xcb/xcb.h>
 #include <xcb/dri3.h>
+#include <xcb/glx.h>
 
 #include "x11-platform.h"
 #include "config-list.h"
@@ -201,7 +202,61 @@ X11DriverFormat *eplX11FindDriverFormat(X11DisplayInstance *inst, uint32_t fourc
             sizeof(X11DriverFormat), CompareFormatSupportInfo);
 }
 
-static xcb_visualid_t FindVisualForFormat(EplPlatformData *plat, xcb_connection_t *conn, xcb_screen_t *xscreen, const EplFormatInfo *fmt)
+struct GlxConfig
+{
+    uint32_t visual;
+    uint32_t class;
+    uint32_t rgba;
+    uint32_t redBits;
+    uint32_t greenBits;
+    uint32_t blueBits;
+    uint32_t alphaBits;
+    uint32_t accumRedBits;
+    uint32_t accumGreenBits;
+    uint32_t accumBlueBits;
+    uint32_t accumAlphaBits;
+    uint32_t doubleBufferMode;
+    uint32_t stereoMode;
+    uint32_t rgbBits;
+    uint32_t depthBits;
+    uint32_t stencilBits;
+    uint32_t numAuxBuffers;
+    uint32_t level;
+
+    uint32_t GLX_VISUAL_CAVEAT_EXT;
+    uint32_t visualRating;
+    uint32_t GLX_TRANSPARENT_TYPE;
+    uint32_t transparentPixel;
+    uint32_t GLX_TRANSPARENT_RED_VALUE;
+    uint32_t transparentRed;
+    uint32_t GLX_TRANSPARENT_GREEN_VALUE;
+    uint32_t transparentGreen;
+    uint32_t GLX_TRANSPARENT_BLUE_VALUE;
+    uint32_t transparentBlue;
+    uint32_t GLX_TRANSPARENT_ALPHA_VALUE;
+    uint32_t transparentAlpha;
+    uint32_t GLX_TRANSPARENT_INDEX_VALUE;
+    uint32_t transparentIndex;
+    uint32_t GLX_SAMPLES_SGIS;
+    uint32_t samples;
+    uint32_t GLX_SAMPLE_BUFFERS_SGIS;
+    uint32_t sampleBuffers;
+    uint32_t GLX_VISUAL_SELECT_GROUP_SGIX;
+    uint32_t visualSelectGroup;
+    uint32_t GLX_FRAMEBUFFER_SRGB_CAPABLE_EXT;
+    uint32_t sRGBCapable;
+};
+
+static const struct GlxConfig *FindVisualGlxConfig(xcb_visualid_t visual, uint32_t numConfigs, const struct GlxConfig *glxConfigs)
+{
+    for (uint32_t i = 0; i < numConfigs; i++)
+        if (glxConfigs[i].visual == visual)
+            return glxConfigs + i;
+    return NULL;
+}
+
+static xcb_visualid_t FindVisualForFormat(EplPlatformData *plat, xcb_connection_t *conn, xcb_screen_t *xscreen, const EplFormatInfo *fmt,
+        EGLint sampleBuffers, EGLint samples, uint32_t numConfigs, struct GlxConfig *glxConfigs)
 {
     xcb_depth_iterator_t depthIter;
     int depth = fmt->colors[0] + fmt->colors[1] + fmt->colors[2] + fmt->colors[3];
@@ -226,7 +281,11 @@ static xcb_visualid_t FindVisualForFormat(EplPlatformData *plat, xcb_connection_
                         && visIter.data->green_mask == green_mask
                         && visIter.data->blue_mask == blue_mask)
                 {
-                    return visIter.data->visual_id;
+                    const struct GlxConfig *glxConfig = FindVisualGlxConfig(visIter.data->visual_id, numConfigs, glxConfigs);
+                    if (glxConfig && glxConfig->sampleBuffers == sampleBuffers && glxConfig->samples == samples)
+                    {
+                        return visIter.data->visual_id;
+                    }
                 }
             }
         }
@@ -234,10 +293,10 @@ static xcb_visualid_t FindVisualForFormat(EplPlatformData *plat, xcb_connection_
 
     return 0;
 }
-static void SetupConfig(EplPlatformData *plat, X11DisplayInstance *inst, EplConfig *config)
+static void SetupConfig(EplPlatformData *plat, X11DisplayInstance *inst, EplConfig *config, uint32_t numConfigs, struct GlxConfig *glxConfigs)
 {
     X11DriverFormat *support = NULL;
-    EGLint fourcc = DRM_FORMAT_INVALID;
+    EGLint samples, sampleBuffers, fourcc = DRM_FORMAT_INVALID;
     xcb_visualid_t visual;
 
     config->surfaceMask &= ~(EGL_WINDOW_BIT | EGL_PIXMAP_BIT);
@@ -270,7 +329,15 @@ static void SetupConfig(EplPlatformData *plat, X11DisplayInstance *inst, EplConf
     // as they have a supported modifier.
     config->surfaceMask |= EGL_PIXMAP_BIT;
 
-    visual = FindVisualForFormat(inst->platform, inst->conn, inst->xscreen, support->fmt);
+    if (!plat->priv->egl.PlatformGetConfigAttribNVX(inst->internal_display->edpy,
+                config->config, EGL_SAMPLE_BUFFERS, &sampleBuffers))
+        sampleBuffers = 0;
+    if (!plat->priv->egl.PlatformGetConfigAttribNVX(inst->internal_display->edpy,
+                config->config, EGL_SAMPLES, &samples))
+        samples = 0;
+
+    visual = FindVisualForFormat(inst->platform, inst->conn, inst->xscreen, support->fmt,
+            sampleBuffers, samples, numConfigs, glxConfigs);
     if (visual != 0)
     {
         config->nativeVisualID = visual;
@@ -285,18 +352,38 @@ static void SetupConfig(EplPlatformData *plat, X11DisplayInstance *inst, EplConf
 
 EGLBoolean eplX11InitConfigList(EplPlatformData *plat, X11DisplayInstance *inst)
 {
+    xcb_generic_error_t *error = NULL;
+    xcb_glx_get_visual_configs_cookie_t configCookie = xcb_glx_get_visual_configs(inst->conn, inst->screen);
+    xcb_glx_get_visual_configs_reply_t *glxConfigs = xcb_glx_get_visual_configs_reply(inst->conn, configCookie, &error);
     int i;
+
+    if (glxConfigs == NULL)
+    {
+        eplSetError(plat, EGL_BAD_ALLOC, "Can't find any GLX config");
+        free(error);
+        return EGL_FALSE;
+    }
+
+    if (glxConfigs->num_properties * sizeof(uint32_t) != sizeof(struct GlxConfig))
+    {
+        eplSetError(plat, EGL_BAD_ALLOC, "Unsupported GLX config property count");
+        free(glxConfigs);
+        return EGL_FALSE;
+    }
 
     inst->configs = eplConfigListCreate(plat, inst->internal_display->edpy);
     if (inst->configs == NULL)
     {
         eplSetError(plat, EGL_BAD_ALLOC, "Can't find any usable EGLConfigs");
+        free(glxConfigs);
         return EGL_FALSE;
     }
     for (i=0; i<inst->configs->num_configs; i++)
     {
-        SetupConfig(plat, inst, &inst->configs->configs[i]);
+        SetupConfig(plat, inst, &inst->configs->configs[i], glxConfigs->num_visuals,
+                (struct GlxConfig *)xcb_glx_get_visual_configs_property_list(glxConfigs));
     }
+    free(glxConfigs);
     return EGL_TRUE;
 }
 
