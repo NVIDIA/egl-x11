@@ -259,6 +259,11 @@ static void SetupConfig(EplPlatformData *plat, X11DisplayInstance *inst, EplConf
         return;
     }
 
+    if ((config->surfaceMask & EGL_STREAM_BIT_KHR) == 0)
+    {
+        return;
+    }
+
     support = eplX11FindDriverFormat(inst, fourcc);
     if (support == NULL)
     {
@@ -273,9 +278,27 @@ static void SetupConfig(EplPlatformData *plat, X11DisplayInstance *inst, EplConf
     visual = FindVisualForFormat(inst->platform, inst->conn, inst->xscreen, support->fmt);
     if (visual != 0)
     {
+        EGLBoolean can_support_windows = EGL_TRUE;
+
+        if (!EGL_PLATFORM_SURFACE_INTERFACE_CHECK_VERSION(plat->priv->egl.platform_surface_version,
+                    EGL_PLATFORM_SURFACE_INTERNAL_SWAP_SINCE))
+        {
+            // Multisampled surfaces require additional driver support which was
+            // added in interface version 0.2.
+            EGLint msaa = 0;
+            if (plat->priv->egl.PlatformGetConfigAttribNVX(inst->internal_display->edpy,
+                        config->config, EGL_SAMPLE_BUFFERS, &msaa))
+            {
+                can_support_windows = (msaa == 0);
+            }
+        }
+
         config->nativeVisualID = visual;
         config->nativeVisualType = XCB_VISUAL_CLASS_TRUE_COLOR;
-        config->surfaceMask |= EGL_WINDOW_BIT;
+        if (can_support_windows)
+        {
+            config->surfaceMask |= EGL_WINDOW_BIT;
+        }
     }
     else
     {
