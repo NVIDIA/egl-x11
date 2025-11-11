@@ -2201,6 +2201,16 @@ EGLBoolean eplX11SwapBuffers(EplPlatformData *plat, EplDisplay *pdpy, EplSurface
     // reallocating the color buffers while we're trying to rearrange them.
     pwin->skip_update_callback++;
 
+    if (EGL_PLATFORM_SURFACE_INTERFACE_CHECK_VERSION(plat->priv->egl.platform_surface_version,
+                EGL_PLATFORM_SURFACE_INTERNAL_SWAP_SINCE))
+    {
+        // Call into the driver to do any extra pre-present work.
+        if (!plat->egl.SwapBuffers(pwin->inst->internal_display->edpy, surf->internal_surface))
+        {
+            goto done;
+        }
+    }
+
     if (CheckWindowDeleted(surf, &ret))
     {
         goto done;

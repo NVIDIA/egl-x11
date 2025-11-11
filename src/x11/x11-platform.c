@@ -53,7 +53,6 @@ static const char *FORCE_ENABLE_ENV = "__NV_FORCE_ENABLE_X11_EGL_PLATFORM";
 #define CLIENT_EXTENSIONS_XLIB "EGL_KHR_platform_x11 EGL_EXT_platform_x11"
 #define CLIENT_EXTENSIONS_XCB "EGL_EXT_platform_xcb"
 
-static const EGLint NEED_PLATFORM_SURFACE_MAJOR = 0;
 static const EGLint NEED_PLATFORM_SURFACE_MINOR = 1;
 static const uint32_t NEED_DRI3_MAJOR = 1;
 static const uint32_t NEED_DRI3_MINOR = 2;
@@ -166,13 +165,18 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
         return EGL_FALSE;
     }
 
+    // Check that the driver supports a compatible version of the platform
+    // surface interface.
     ptr_eglPlatformGetVersionNVX = driver->getProcAddress("eglPlatformGetVersionNVX");
-    if (ptr_eglPlatformGetVersionNVX == NULL
-            || !EGL_PLATFORM_SURFACE_INTERFACE_CHECK_VERSION(ptr_eglPlatformGetVersionNVX(),
-                NEED_PLATFORM_SURFACE_MAJOR, NEED_PLATFORM_SURFACE_MINOR))
+    if (ptr_eglPlatformGetVersionNVX == NULL)
     {
-        // The driver doesn't support a compatible version of the platform
-        // surface interface.
+        eplPlatformBaseInitFail(plat);
+        return EGL_FALSE;
+    }
+    plat->priv->egl.platform_surface_version = ptr_eglPlatformGetVersionNVX();
+    if (!EGL_PLATFORM_SURFACE_INTERFACE_CHECK_VERSION(plat->priv->egl.platform_surface_version,
+                NEED_PLATFORM_SURFACE_MINOR))
+    {
         eplPlatformBaseInitFail(plat);
         return EGL_FALSE;
     }
