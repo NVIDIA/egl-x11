@@ -76,15 +76,14 @@ static EGLBoolean eplX11GetPlatformDisplay(EplPlatformData *plat, EplDisplay *pd
         struct glvnd_list *existing_displays);
 static EGLBoolean eplX11InitializeDisplay(EplPlatformData *plat, EplDisplay *pdpy, EGLint *major, EGLint *minor);
 static void eplX11TerminateDisplay(EplPlatformData *plat, EplDisplay *pdpy);
-static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf);
-static void eplX11FreeSurface(EplDisplay *pdpy, EplSurface *surf);
+static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf,
+        const struct glvnd_list *existing_surfaces);
 static EGLBoolean eplX11WaitGL(EplDisplay *pdpy, EplSurface *psurf);
 
 static const EplHookFunc X11_HOOK_FUNCTIONS[] =
 {
     { "eglChooseConfig", eplX11HookChooseConfig },
     { "eglGetConfigAttrib", eplX11HookGetConfigAttrib },
-    { "eglSwapInterval", eplX11SwapInterval },
 };
 static const int NUM_X11_HOOK_FUNCTIONS = sizeof(X11_HOOK_FUNCTIONS) / sizeof(X11_HOOK_FUNCTIONS[0]);
 
@@ -101,9 +100,9 @@ static const EplImplFuncs X11_IMPL_FUNCS =
     .CreateWindowSurface = eplX11CreateWindowSurface,
     .CreatePixmapSurface = eplX11CreatePixmapSurface,
     .DestroySurface = eplX11DestroySurface,
-    .FreeSurface = eplX11FreeSurface,
     .SwapBuffers = eplX11SwapBuffers,
     .WaitGL = eplX11WaitGL,
+    .SwapInterval = eplX11SwapInterval,
 };
 
 /**
@@ -1274,7 +1273,8 @@ static void eplX11TerminateDisplay(EplPlatformData *plat, EplDisplay *pdpy)
     pdpy->priv->inst = NULL;
 }
 
-static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf)
+static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf,
+        const struct glvnd_list *existing_surfaces)
 {
     if (surf->type == EPL_SURFACE_TYPE_WINDOW)
     {
@@ -1287,14 +1287,6 @@ static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf)
     else
     {
         assert(!"Invalid surface type.");
-    }
-}
-
-static void eplX11FreeSurface(EplDisplay *pdpy, EplSurface *surf)
-{
-    if (surf->type == EPL_SURFACE_TYPE_WINDOW)
-    {
-        eplX11FreeWindow(surf);
     }
 }
 

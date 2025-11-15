@@ -391,10 +391,12 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
         EGLint platform_enum);
 
 EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *surf,
-        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+        const struct glvnd_list *existing_surfaces);
 
 EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *surf,
-        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+        EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+        const struct glvnd_list *existing_surfaces);
 
 EGLBoolean eplX11SwapBuffers(EplPlatformData *plat, EplDisplay *pdpy, EplSurface *surf,
         const EGLint *rects, EGLint n_rects);
@@ -445,11 +447,9 @@ EGLBoolean eplX11HookGetConfigAttrib(EGLDisplay edpy, EGLConfig config,
 
 void eplX11DestroyPixmap(EplSurface *surf);
 
-EGLBoolean eplX11SwapInterval(EGLDisplay edpy, EGLint interval);
+EGLBoolean eplX11SwapInterval(EplDisplay *pdpy, EplSurface *psurf, EGLint interval);
 
 void eplX11DestroyWindow(EplSurface *surf);
-
-void eplX11FreeWindow(EplSurface *surf);
 
 EGLBoolean eplX11WaitGLWindow(EplDisplay *pdpy, EplSurface *psurf);
 
