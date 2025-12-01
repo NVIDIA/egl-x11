@@ -1311,23 +1311,13 @@ static EGLBoolean eplX11WaitGL(EplDisplay *pdpy, EplSurface *psurf)
     return ret;
 }
 
-EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat, EplDisplay *pdpy, const EGLAttrib *attribs)
+EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat,
+        EplDisplay *pdpy, EplSurfaceType surface_type, const EGLAttrib *attribs)
 {
     EGLAttrib *internalAttribs = NULL;
-    int count = 0;
+    int count = eplCountAttribs(attribs);
 
-    if (attribs != NULL)
-    {
-        for (count = 0; attribs[count] != EGL_NONE; count += 2)
-        {
-            if (attribs[count] == EGL_SURFACE_Y_INVERTED_NVX)
-            {
-                eplSetError(plat, EGL_BAD_ATTRIBUTE, "Invalid attribute 0x%04x\n", attribs[count]);
-                return NULL;
-            }
-        }
-    }
-
+    // Allocate extra space so that we can add EGL_SURFACE_Y_INVERTED_NVX below.
     internalAttribs = malloc((count + 3) * sizeof(EGLAttrib));
     if (internalAttribs == NULL)
     {
@@ -1335,10 +1325,71 @@ EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat, EplDisplay *pd
         return NULL;
     }
 
-    memcpy(internalAttribs, attribs, count * sizeof(EGLAttrib));
-    internalAttribs[count] = EGL_SURFACE_Y_INVERTED_NVX;
-    internalAttribs[count + 1] = EGL_TRUE;
-    internalAttribs[count + 2] = EGL_NONE;
+    count = 0;
+    internalAttribs[count++] = EGL_SURFACE_Y_INVERTED_NVX;
+    internalAttribs[count++] = EGL_TRUE;
+
+    if (attribs != NULL)
+    {
+        int i;
+        for (i=0; attribs[i] != EGL_NONE; i += 2)
+        {
+            if (attribs[i] == EGL_SURFACE_Y_INVERTED_NVX)
+            {
+                eplSetError(plat, EGL_BAD_ATTRIBUTE, "Invalid attribute 0x%04x\n", attribs[i]);
+                free(internalAttribs);
+                return NULL;
+            }
+            else if (attribs[i] == EGL_RENDER_BUFFER)
+            {
+                /*
+                 * eglPlatformCreateSurfaceNVX doesn't accept the
+                 * EGL_RENDER_BUFFER attribute, since it's the platform library
+                 * that allocates and specifies the front and back buffers, not
+                 * the driver.
+                 */
+                if (surface_type != EPL_SURFACE_TYPE_WINDOW)
+                {
+                    /*
+                     * The EGL_RENDER_BUFFER is not valid for pixmaps, since
+                     * they're always single-buffered.
+                     */
+                    eplSetError(plat, EGL_BAD_ATTRIBUTE, "EGL_RENDER_BUFFER is not valid for pixmaps");
+                    free(internalAttribs);
+                    return NULL;
+                }
+                else if (attribs[i + 1] == EGL_SINGLE_BUFFER)
+                {
+                    /*
+                     * We don't currently support single-buffered rendering for
+                     * a window, but this attribute is only a hint, so it's not
+                     * an error to request it.
+                     *
+                     * If we do implement EGL_SINGLE_BUFFER for windows in the
+                     * future, then we'd do that by passing only a GL_FRONT
+                     * buffer to eglPlatformCreateSurfaceNVX, like we do for
+                     * pixmaps.
+                     */
+                    plat->callbacks.debugMessage(EGL_DEBUG_MSG_WARN_KHR,
+                            "EGL_SINGLE_BUFFER requested, but single-buffered rendering is not supported");
+                }
+                else if (attribs[i + 1] != EGL_BACK_BUFFER)
+                {
+                    eplSetError(plat, EGL_BAD_ATTRIBUTE,
+                            "Invalid EGL_RENDER_BUFFER value 0x%04x", attribs[i + 1]);
+                    free(internalAttribs);
+                    return NULL;
+                }
+            }
+            else
+            {
+                internalAttribs[count++] = attribs[i];
+                internalAttribs[count++] = attribs[i + 1];
+            }
+        }
+    }
+
+    internalAttribs[count] = EGL_NONE;
     return internalAttribs;
 }
 
