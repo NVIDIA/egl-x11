@@ -732,6 +732,11 @@ void eplX11FreeWindow(EplSurface *surf)
 {
     X11Window *pwin = (X11Window *) surf->priv;
 
+    if (pwin == NULL)
+    {
+        return;
+    }
+
     FreeWindowBuffers(surf);
 
     if (pwin->inst->conn != NULL && pwin->present_event != NULL)
@@ -1308,10 +1313,10 @@ EGLSurface eplX11CreateWindowSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
         return EGL_NO_SURFACE;
     }
 
-    internalAttribs = eplX11GetInternalSurfaceAttribs(plat, pdpy, internalAttribs);
+    internalAttribs = eplX11GetInternalSurfaceAttribs(plat, pdpy, EPL_SURFACE_TYPE_WINDOW, attribs);
     if (internalAttribs == NULL)
     {
-        goto done;
+        return EGL_NO_SURFACE;
     }
 
     fmt = eplX11FindDriverFormat(inst, configInfo->fourcc);

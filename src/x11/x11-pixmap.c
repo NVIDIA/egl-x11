@@ -370,6 +370,7 @@ static void PixmapDamageCallback(void *param, int syncfd, unsigned int flags)
 void eplX11DestroyPixmap(EplSurface *surf)
 {
     X11Pixmap *ppix = (X11Pixmap *) surf->priv;
+
     surf->priv = NULL;
     if (ppix != NULL)
     {
@@ -468,10 +469,10 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     fmt = eplFormatInfoLookup(configInfo->fourcc);
     assert(fmt != NULL);
 
-    internalAttribs = eplX11GetInternalSurfaceAttribs(plat, pdpy, internalAttribs);
+    internalAttribs = eplX11GetInternalSurfaceAttribs(plat, pdpy, EPL_SURFACE_TYPE_PIXMAP, attribs);
     if (internalAttribs == NULL)
     {
-        goto done;
+        return EGL_NO_SURFACE;
     }
 
     geomCookie = xcb_get_geometry(inst->conn, xpix);

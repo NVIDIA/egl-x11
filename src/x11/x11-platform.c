@@ -79,11 +79,13 @@ static void eplX11TerminateDisplay(EplPlatformData *plat, EplDisplay *pdpy);
 static void eplX11DestroySurface(EplDisplay *pdpy, EplSurface *surf);
 static void eplX11FreeSurface(EplDisplay *pdpy, EplSurface *surf);
 static EGLBoolean eplX11WaitGL(EplDisplay *pdpy, EplSurface *psurf);
+static EGLBoolean eplX11HookQuerySurface(EGLDisplay edpy, EGLSurface esurf, EGLint attribute, EGLint *value);
 
 static const EplHookFunc X11_HOOK_FUNCTIONS[] =
 {
     { "eglChooseConfig", eplX11HookChooseConfig },
     { "eglGetConfigAttrib", eplX11HookGetConfigAttrib },
+    { "eglQuerySurface", eplX11HookQuerySurface },
     { "eglSwapInterval", eplX11SwapInterval },
 };
 static const int NUM_X11_HOOK_FUNCTIONS = sizeof(X11_HOOK_FUNCTIONS) / sizeof(X11_HOOK_FUNCTIONS[0]);
@@ -183,6 +185,7 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
 
     plat->priv->egl.QueryDisplayAttribKHR = driver->getProcAddress("eglQueryDisplayAttribKHR");
     plat->priv->egl.SwapInterval = driver->getProcAddress("eglSwapInterval");
+    plat->priv->egl.QuerySurface = driver->getProcAddress("eglQuerySurface");
     plat->priv->egl.QueryDmaBufFormatsEXT = driver->getProcAddress("eglQueryDmaBufFormatsEXT");
     plat->priv->egl.QueryDmaBufModifiersEXT = driver->getProcAddress("eglQueryDmaBufModifiersEXT");
     plat->priv->egl.CreateSync = driver->getProcAddress("eglCreateSync");
@@ -202,6 +205,7 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
 
     if (plat->priv->egl.QueryDisplayAttribKHR == NULL
             || plat->priv->egl.SwapInterval == NULL
+            || plat->priv->egl.QuerySurface == NULL
             || plat->priv->egl.QueryDmaBufFormatsEXT == NULL
             || plat->priv->egl.QueryDmaBufModifiersEXT == NULL
             || plat->priv->egl.CreateSync == NULL
@@ -1311,23 +1315,13 @@ static EGLBoolean eplX11WaitGL(EplDisplay *pdpy, EplSurface *psurf)
     return ret;
 }
 
-EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat, EplDisplay *pdpy, const EGLAttrib *attribs)
+EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat,
+        EplDisplay *pdpy, EplSurfaceType surface_type, const EGLAttrib *attribs)
 {
     EGLAttrib *internalAttribs = NULL;
-    int count = 0;
+    int count = eplCountAttribs(attribs);
 
-    if (attribs != NULL)
-    {
-        for (count = 0; attribs[count] != EGL_NONE; count += 2)
-        {
-            if (attribs[count] == EGL_SURFACE_Y_INVERTED_NVX)
-            {
-                eplSetError(plat, EGL_BAD_ATTRIBUTE, "Invalid attribute 0x%04x\n", attribs[count]);
-                return NULL;
-            }
-        }
-    }
-
+    // Allocate extra space so that we can add EGL_SURFACE_Y_INVERTED_NVX below.
     internalAttribs = malloc((count + 3) * sizeof(EGLAttrib));
     if (internalAttribs == NULL)
     {
@@ -1335,10 +1329,71 @@ EGLAttrib *eplX11GetInternalSurfaceAttribs(EplPlatformData *plat, EplDisplay *pd
         return NULL;
     }
 
-    memcpy(internalAttribs, attribs, count * sizeof(EGLAttrib));
-    internalAttribs[count] = EGL_SURFACE_Y_INVERTED_NVX;
-    internalAttribs[count + 1] = EGL_TRUE;
-    internalAttribs[count + 2] = EGL_NONE;
+    count = 0;
+    internalAttribs[count++] = EGL_SURFACE_Y_INVERTED_NVX;
+    internalAttribs[count++] = EGL_TRUE;
+
+    if (attribs != NULL)
+    {
+        int i;
+        for (i=0; attribs[i] != EGL_NONE; i += 2)
+        {
+            if (attribs[i] == EGL_SURFACE_Y_INVERTED_NVX)
+            {
+                eplSetError(plat, EGL_BAD_ATTRIBUTE, "Invalid attribute 0x%04x\n", attribs[i]);
+                free(internalAttribs);
+                return NULL;
+            }
+            else if (attribs[i] == EGL_RENDER_BUFFER)
+            {
+                /*
+                 * eglPlatformCreateSurfaceNVX doesn't accept the
+                 * EGL_RENDER_BUFFER attribute, since it's the platform library
+                 * that allocates and specifies the front and back buffers, not
+                 * the driver.
+                 */
+                if (surface_type != EPL_SURFACE_TYPE_WINDOW)
+                {
+                    /*
+                     * The EGL_RENDER_BUFFER is not valid for pixmaps, since
+                     * they're always single-buffered.
+                     */
+                    eplSetError(plat, EGL_BAD_ATTRIBUTE, "EGL_RENDER_BUFFER is not valid for pixmaps");
+                    free(internalAttribs);
+                    return NULL;
+                }
+                else if (attribs[i + 1] == EGL_SINGLE_BUFFER)
+                {
+                    /*
+                     * We don't currently support single-buffered rendering for
+                     * a window, but this attribute is only a hint, so it's not
+                     * an error to request it.
+                     *
+                     * If we do implement EGL_SINGLE_BUFFER for windows in the
+                     * future, then we'd do that by passing only a GL_FRONT
+                     * buffer to eglPlatformCreateSurfaceNVX, like we do for
+                     * pixmaps.
+                     */
+                    plat->callbacks.debugMessage(EGL_DEBUG_MSG_WARN_KHR,
+                            "EGL_SINGLE_BUFFER requested, but single-buffered rendering is not supported");
+                }
+                else if (attribs[i + 1] != EGL_BACK_BUFFER)
+                {
+                    eplSetError(plat, EGL_BAD_ATTRIBUTE,
+                            "Invalid EGL_RENDER_BUFFER value 0x%04x", attribs[i + 1]);
+                    free(internalAttribs);
+                    return NULL;
+                }
+            }
+            else
+            {
+                internalAttribs[count++] = attribs[i];
+                internalAttribs[count++] = attribs[i + 1];
+            }
+        }
+    }
+
+    internalAttribs[count] = EGL_NONE;
     return internalAttribs;
 }
 
@@ -1460,4 +1515,56 @@ uint32_t eplX11GetNativeXID(EplDisplay *pdpy, void *native_surface, EGLBoolean c
     }
 
     return xid;
+}
+
+EGLBoolean eplX11HookQuerySurface(EGLDisplay edpy, EGLSurface esurf, EGLint attribute, EGLint *value)
+{
+    EplDisplay *pdpy = NULL;
+    EplSurface *psurf = NULL;
+    EGLBoolean ret = EGL_FALSE;
+
+    pdpy = eplDisplayAcquire(edpy);
+    if (pdpy == NULL)
+    {
+        return EGL_FALSE;
+    }
+
+    if (value == NULL)
+    {
+        eplSetError(pdpy->platform, EGL_BAD_ATTRIBUTE, "value pointer must not be NULL");
+        eplDisplayRelease(pdpy);
+        return EGL_FALSE;
+    }
+
+    psurf = eplSurfaceAcquire(pdpy, esurf);
+    if (psurf != NULL)
+    {
+        if (attribute == EGL_RENDER_BUFFER)
+        {
+            if (psurf->type == EPL_SURFACE_TYPE_WINDOW)
+            {
+                *value = EGL_BACK_BUFFER;
+            }
+            else
+            {
+                *value = EGL_SINGLE_BUFFER;
+            }
+            ret = EGL_TRUE;
+        }
+        else
+        {
+            ret = pdpy->platform->priv->egl.QuerySurface(pdpy->internal_display,
+                    psurf->internal_surface, attribute, value);
+        }
+        eplSurfaceRelease(pdpy, psurf);
+    }
+    else
+    {
+        // If we don't recognize the EGLSurface, then just pass the call
+        // through to the driver.
+        ret = pdpy->platform->priv->egl.QuerySurface(pdpy->internal_display, esurf, attribute, value);
+    }
+
+    eplDisplayRelease(pdpy);
+    return ret;
 }
