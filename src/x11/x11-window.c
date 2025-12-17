@@ -340,15 +340,14 @@ static void FreeColorBuffer(X11DisplayInstance *inst, X11ColorBuffer *buffer)
 static X11ColorBuffer *AllocOneColorBuffer(X11DisplayInstance *inst,
         const EplFormatInfo *fmt, uint32_t width, uint32_t height,
         const uint64_t *modifiers, int num_modifiers,
-        EGLBoolean scanout)
+        EGLBoolean prime)
 {
-    int fd = -1;
     uint32_t flags = 0;
     X11ColorBuffer *buffer = NULL;
 
     assert(num_modifiers > 0);
 
-    if (scanout)
+    if (!prime)
     {
         flags |= GBM_BO_USE_SCANOUT;
     }
@@ -370,14 +369,14 @@ static X11ColorBuffer *AllocOneColorBuffer(X11DisplayInstance *inst,
         goto done;
     }
 
-    fd = gbm_bo_get_fd(buffer->gbo);
-    if (fd < 0)
+    buffer->fd = gbm_bo_get_fd(buffer->gbo);
+    if (buffer->fd < 0)
     {
         goto done;
     }
 
     buffer->buffer = inst->platform->priv->egl.PlatformImportColorBufferNVX(inst->internal_display->edpy,
-            fd, width, height, gbm_bo_get_format(buffer->gbo),
+            buffer->fd, width, height, gbm_bo_get_format(buffer->gbo),
             gbm_bo_get_stride(buffer->gbo),
             gbm_bo_get_offset(buffer->gbo, 0),
             gbm_bo_get_modifier(buffer->gbo));
@@ -386,11 +385,15 @@ static X11ColorBuffer *AllocOneColorBuffer(X11DisplayInstance *inst,
         goto done;
     }
 
-done:
-    if (fd >= 0)
+    if (prime || !inst->supports_implicit_sync)
     {
-        close(fd);
+        // We only need to hold on to a file descriptor for a shared dma-buf,
+        // and only if we're using implicit sync.
+        close(buffer->fd);
+        buffer->fd = -1;
     }
+
+done:
     if (buffer->buffer == NULL)
     {
         FreeColorBuffer(inst, buffer);
@@ -497,7 +500,7 @@ static EGLBoolean AllocWindowBuffers(EplSurface *surf,
     EGLBoolean success = EGL_TRUE;
 
     front = AllocOneColorBuffer(pwin->inst, pwin->format->fmt, pwin->pending_width, pwin->pending_height,
-            modifiers, num_modifiers, !prime);
+            modifiers, num_modifiers, prime);
     if (front == NULL)
     {
         goto done;
@@ -508,7 +511,7 @@ static EGLBoolean AllocWindowBuffers(EplSurface *surf,
     modifier = gbm_bo_get_modifier(front->gbo);
 
     back = AllocOneColorBuffer(pwin->inst, pwin->format->fmt, pwin->pending_width, pwin->pending_height,
-            &modifier, 1, !prime);
+            &modifier, 1, prime);
     if (back == NULL)
     {
         goto done;
@@ -1785,6 +1788,7 @@ static int CheckBufferReleaseImplicit(EplDisplay *pdpy, EplSurface *surf,
     {
         if (buffer != skip && buffer->status == BUFFER_STATUS_IDLE_NOTIFIED)
         {
+            assert(buffer->fd >= 0);
             buffers[count] = buffer;
             fds[count].fd = buffer->fd;
             fds[count].events = POLLOUT;
@@ -2107,7 +2111,7 @@ static X11ColorBuffer *GetFreeBuffer(EplDisplay *pdpy, EplSurface *surf,
             else
             {
                 buffer = AllocOneColorBuffer(pwin->inst, pwin->format->fmt, pwin->width, pwin->height,
-                        &pwin->modifier, 1, !pwin->prime);
+                        &pwin->modifier, 1, pwin->prime);
             }
             if (buffer == NULL)
             {
