@@ -43,6 +43,11 @@
 #include "config-list.h"
 #include "refcountobj.h"
 
+// FreeBSD doesn't have ETIME, so the DRM calls return ETIMEDOUT instead.
+#ifndef ETIME
+#define ETIME ETIMEDOUT
+#endif
+
 #ifndef EGL_EXT_platform_xcb
 #define EGL_EXT_platform_xcb 1
 #define EGL_PLATFORM_XCB_EXT              0x31DC
