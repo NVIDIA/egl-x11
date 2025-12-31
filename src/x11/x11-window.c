@@ -1827,7 +1827,7 @@ static int CheckBufferReleaseImplicit(EplDisplay *pdpy, EplSurface *surf,
         }
         return count;
     }
-    else if (ret == 0 || err == ETIME || err == EINTR)
+    else if (ret == 0 || err == EINTR)
     {
         // Nothing freed up before the timeout, but that's not a fatal error
         // here.
