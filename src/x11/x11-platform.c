@@ -182,9 +182,6 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
         return EGL_FALSE;
     }
 
-    plat->priv->egl.QueryDisplayAttribKHR = driver->getProcAddress("eglQueryDisplayAttribKHR");
-    plat->priv->egl.SwapInterval = driver->getProcAddress("eglSwapInterval");
-    plat->priv->egl.QuerySurface = driver->getProcAddress("eglQuerySurface");
     plat->priv->egl.QueryDmaBufFormatsEXT = driver->getProcAddress("eglQueryDmaBufFormatsEXT");
     plat->priv->egl.QueryDmaBufModifiersEXT = driver->getProcAddress("eglQueryDmaBufModifiersEXT");
     plat->priv->egl.CreateSync = driver->getProcAddress("eglCreateSync");
@@ -202,10 +199,7 @@ EGLBoolean eplX11LoadEGLExternalPlatformCommon(int major, int minor,
     plat->priv->egl.PlatformAllocColorBufferNVX = driver->getProcAddress("eglPlatformAllocColorBufferNVX");
     plat->priv->egl.PlatformExportColorBufferNVX = driver->getProcAddress("eglPlatformExportColorBufferNVX");
 
-    if (plat->priv->egl.QueryDisplayAttribKHR == NULL
-            || plat->priv->egl.SwapInterval == NULL
-            || plat->priv->egl.QuerySurface == NULL
-            || plat->priv->egl.QueryDmaBufFormatsEXT == NULL
+    if (plat->priv->egl.QueryDmaBufFormatsEXT == NULL
             || plat->priv->egl.QueryDmaBufModifiersEXT == NULL
             || plat->priv->egl.CreateSync == NULL
             || plat->priv->egl.DestroySync == NULL

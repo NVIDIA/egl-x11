@@ -76,9 +76,6 @@ struct _EplImplPlatform
 {
     struct
     {
-        PFNEGLQUERYDISPLAYATTRIBKHRPROC QueryDisplayAttribKHR;
-        PFNEGLSWAPINTERVALPROC SwapInterval;
-        PFNEGLQUERYSURFACEPROC QuerySurface;
         PFNEGLQUERYDMABUFFORMATSEXTPROC QueryDmaBufFormatsEXT;
         PFNEGLQUERYDMABUFMODIFIERSEXTPROC QueryDmaBufModifiersEXT;
         PFNEGLCREATESYNCPROC CreateSync;
