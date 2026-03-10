@@ -36,6 +36,31 @@ extern "C" {
 #endif
 
 /**
+ * This is the return value used for EplImplFuncs::QuerySurface.
+ */
+typedef enum
+{
+    /**
+     * The platform library doesn't recognize the attribute. In this case, the
+     * base library will pass the query through to the driver.
+     */
+    EPL_QUERY_RESULT_UNKNOWN,
+
+    /**
+     * The platform library recognized and returned the attribute.
+     */
+    EPL_QUERY_RESULT_SUCCESS,
+
+    /**
+     * The platform library recognized the attribute, but there was some error
+     * returning the value.
+     *
+     * The platform library should set the EGL error code before returning.
+     */
+    EPL_QUERY_RESULT_ERROR,
+} EplQueryResult;
+
+/**
  * A table of functions for the platform-specific implementation.
  */
 typedef struct _EplImplFuncs
@@ -183,10 +208,13 @@ typedef struct _EplImplFuncs
      * \param create_platform If this is true, then the call is from
      *      eglCreatePlatformWindowSurface. If false, it's from
      *      eglCreateWindowSurface.
+     * \param existing_surfaces A linked list of existing surfaces. The new
+     *      surface will not be in this list.
      * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
      */
     EGLSurface (* CreateWindowSurface) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
-            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+            const struct glvnd_list *existing_surfaces);
 
     /**
      * Creates an EGLSurface for a pixmap.
@@ -202,35 +230,29 @@ typedef struct _EplImplFuncs
      * \param create_platform If this is true, then the call is from
      *      eglCreatePlatformPixmapSurface. If false, it's from
      *      eglCreatePixmapSurface.
+     * \param existing_surfaces A linked list of existing surfaces. The new
+     *      surface will not be in this list.
      * \return The internal EGLSurface handle, or EGL_NO_SURFACE on failure.
      */
     EGLSurface (* CreatePixmapSurface) (EplPlatformData *plat, EplDisplay *pdpy, EplSurface *psurf,
-            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform);
+            EGLConfig config, void *native_surface, const EGLAttrib *attribs, EGLBoolean create_platform,
+            const struct glvnd_list *existing_surfaces);
 
     /**
-     * Called to handle eglDestroySurface and eglTerminate.
+     * Called from eglDestroySurface and eglTerminate to destroy a surface.
      *
-     * Note that it's possible that the EplSurface struct itself might stick around
-     * if another thread is holding a reference to it.
+     * After this, the \c EplSurface struct itself is freed.
      *
-     * \c FreeSurface is called when the refcount actually drops to zero.
+     * Note that this function is called with the surface list already locked,
+     * so it must not try to call \c eplDisplayLockSurfaceList.
      *
-     * \param plat The EplPlatformData struct
      * \param pdpy The EplDisplay struct
+     * \param psurf The EplSurface that's being destroyed.
+     * \param existing_surfaces A linked list of existing surfaces. \p psurf
+     *      will not be in this list.
      */
-    void (* DestroySurface) (EplDisplay *pdpy, EplSurface *psurf);
-
-    /**
-     * Called when an EplSurface is about to be freed.
-     *
-     * At this point, it's safe to assume that no other thread is going to touch
-     * the surface, so the platform must free anything that it hasn't already freed
-     * in \c DestroySurface.
-     *
-     * \param plat The EplPlatformData struct
-     * \param pdpy The EplDisplay struct
-     */
-    void (* FreeSurface) (EplDisplay *pdpy, EplSurface *psurf);
+    void (* DestroySurface) (EplDisplay *pdpy, EplSurface *psurf,
+            const struct glvnd_list *existing_surfaces);
 
     /**
      * Implements eglSwapBuffers and eglSwapBuffersWithDamageEXT.
@@ -290,9 +312,61 @@ typedef struct _EplImplFuncs
      * \param pdpy The EplDisplay struct
      * \param attrib The attribute to look up.
      * \param[out] value Returns the value of the attribute.
-     * \return EGL_TRUE on success, EGL_FALSE on failure.
+     * \return An \c EplQueryResult value.
      */
-    EGLBoolean (*QueryDisplayAttrib) (EplDisplay *pdpy, EGLint attrib, EGLAttrib *ret_value);
+    EplQueryResult (*QueryDisplayAttrib) (EplDisplay *pdpy, EGLint attrib, EGLAttrib *ret_value);
+
+    /**
+     * Implements eglSwapInterval.
+     *
+     * This is only called if the current EGLSurface belongs to the platform
+     * library. If the current EGLSurface does not belong to the platform
+     * library (e.g., a pbuffer or stream), then the base library will pass the
+     * call through to the driver.
+     *
+     * This function is optional. If it's NULL, then the base library will not
+     * provide a hook function eglSwapInterval, and so the driver will follow its
+     * default behavior.
+     *
+     * \param pdpy The current display.
+     * \param psurf The current draw surface. This will never be NULL.
+     * \param interval The new swap interval.
+     * \return EGL_TRUE on success, or EGL_FALSE on failure.
+     */
+    EGLBoolean (* SwapInterval) (EplDisplay *pdpy, EplSurface *psurf, EGLint interval);
+
+    /**
+     * Implements eglQuerySurface for any platform-specific attributes.
+     *
+     * This function is optional. If it's NULL, then the base library will just
+     * act as if the platform returned EPL_QUERY_RESULT_UNKNOWN.
+     *
+     * Note that the base library handles the error checking for
+     * EGL_EXT_buffer_age and EGL_KHR_partial_update internally. If \p attrib
+     * is \c EGL_BUFFER_AGE_KHR, then the platform can assume that the surface
+     * is current.
+     *
+     * \param pdpy The current display.
+     * \param psurf The current draw surface. This will never be NULL.
+     * \param attrib The attribute to look up.
+     * \param[out] value Returns the value of the attribute.
+     * \return An \c EplQueryResult value.
+     */
+    EplQueryResult (* QuerySurface) (EplDisplay *pdpy, EplSurface *psurf, EGLint attrib, EGLint *ret_value);
+
+    /**
+     * Implements eglSetDamageRegionKHR.
+     *
+     * This function is optional. If it's NULL, then the base library will
+     * ignore the damage areas and return success.
+     *
+     * \param pdpy The current display.
+     * \param psurf The current draw surface. This will never be NULL.
+     * \param rects The damage rectangles.
+     * \param n_rects The number of elements in the \p rects array.
+     * \return EGL_TRUE on success, or EGL_FALSE on failure.
+     */
+    EGLBoolean (* SetDamageRegion) (EplDisplay *pdpy, EplSurface *psurf, const EGLint *rects, EGLint n_rects);
 } EplImplFuncs;
 
 #ifdef __cplusplus
