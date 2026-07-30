@@ -148,6 +148,14 @@ typedef struct
      */
     X11Timeline timeline;
 
+    /**
+     * The EGL_BUFFER_AGE_KHR value for this buffer.
+     *
+     * 0 means the contents are undefined (buffer was never presented, or
+     * this is a PRIME surface). Updated after each successful PresentPixmap.
+     */
+    EGLint buffer_age;
+
     struct glvnd_list entry;
 } X11ColorBuffer;
 
@@ -2280,6 +2288,18 @@ EGLBoolean eplX11SwapBuffers(EplPlatformData *plat, EplDisplay *pdpy, EplSurface
             eplSetError(plat, EGL_BAD_ALLOC, "Driver error: Can't assign new color buffers");
             goto done;
         }
+
+        if (!pwin->prime)
+        {
+            X11ColorBuffer *buf;
+            glvnd_list_for_each_entry(buf, &pwin->color_buffers, entry)
+            {
+                if (buf == pwin->current_front)
+                    buf->buffer_age = 1;
+                else if (buf->buffer_age != 0)
+                    buf->buffer_age++;
+            }
+        }
     }
 
     ret = EGL_TRUE;
@@ -2289,6 +2309,16 @@ done:
     pwin->skip_update_callback--;
     pthread_mutex_unlock(&pwin->mutex);
     return ret;
+}
+
+EGLint eplX11GetWindowBufferAge(EplSurface *surf)
+{
+    X11Window *pwin = (X11Window *) surf->priv;
+
+    if (pwin->prime || pwin->current_back == NULL)
+        return 0;
+
+    return pwin->current_back->buffer_age;
 }
 
 EGLBoolean eplX11SwapInterval(EplDisplay *pdpy, EplSurface *psurf, EGLint interval)
