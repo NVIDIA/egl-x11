@@ -148,6 +148,7 @@ EplPlatformData *eplPlatformBaseAllocate(int major, int minor,
         platform->egl.SwapBuffersWithDamage = driver->getProcAddress("eglSwapBuffersWithDamageEXT");
     }
     platform->egl.CreateStreamProducerSurfaceKHR = driver->getProcAddress("CreateStreamProducerSurfaceKHR");
+    platform->egl.SetDamageRegionKHR = driver->getProcAddress("eglSetDamageRegionKHR");
 
     if (platform->egl.QueryString == NULL
             || platform->egl.QueryString == NULL
