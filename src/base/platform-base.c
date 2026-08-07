@@ -1300,7 +1300,10 @@ static EGLBoolean HookSwapInterval(EGLDisplay edpy, EGLint interval)
     }
     else
     {
-        eplSetError(pdpy->platform, EGL_BAD_SURFACE, "EGLDisplay %p is not current", edpy);
+        // Current display is not this display (or there is no current context).
+        // Pass through to the driver, which will return the appropriate error.
+        internal_edpy = pdpy->internal_display;
+        SwapInterval = pdpy->platform->egl.SwapInterval;
     }
 
     if (SwapInterval != NULL)
