@@ -447,16 +447,8 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     };
     EGLAttrib *internalAttribs = NULL;
 
-    if (xpix == 0)
-    {
-        eplSetError(plat, EGL_BAD_NATIVE_PIXMAP, "Invalid native pixmap %p\n", native_surface);
-        return EGL_NO_SURFACE;
-    }
-    if (!CheckExistingPixmap(pdpy, xpix, existing_surfaces))
-    {
-        return EGL_NO_SURFACE;
-    }
-
+    // Validate config before pixmap to match EGL spec error priority
+    // (EGL_BAD_CONFIG before EGL_BAD_NATIVE_PIXMAP).
     configInfo = eplConfigListFind(inst->configs, config);
     if (configInfo == NULL)
     {
@@ -466,6 +458,16 @@ EGLSurface eplX11CreatePixmapSurface(EplPlatformData *plat, EplDisplay *pdpy, Ep
     if (!(configInfo->surfaceMask & EGL_PIXMAP_BIT))
     {
         eplSetError(plat, EGL_BAD_CONFIG, "EGLConfig %p does not support pixmaps", config);
+        return EGL_NO_SURFACE;
+    }
+
+    if (xpix == 0)
+    {
+        eplSetError(plat, EGL_BAD_NATIVE_PIXMAP, "Invalid native pixmap %p\n", native_surface);
+        return EGL_NO_SURFACE;
+    }
+    if (!CheckExistingPixmap(pdpy, xpix, existing_surfaces))
+    {
         return EGL_NO_SURFACE;
     }
     fmt = eplFormatInfoLookup(configInfo->fourcc);
