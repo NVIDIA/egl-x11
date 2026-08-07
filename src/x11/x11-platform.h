@@ -453,6 +453,14 @@ void eplX11DestroyPixmap(EplSurface *surf);
 
 EGLBoolean eplX11SwapInterval(EplDisplay *pdpy, EplSurface *psurf, EGLint interval);
 
+/**
+ * Returns the EGL_BUFFER_AGE_KHR value for a window surface.
+ *
+ * Returns 0 for PRIME surfaces or if no swap has occurred yet.
+ * Must only be called when the surface is current (enforced by platform-base.c).
+ */
+EGLint eplX11GetWindowBufferAge(EplSurface *surf);
+
 void eplX11DestroyWindow(EplSurface *surf);
 
 EGLBoolean eplX11WaitGLWindow(EplDisplay *pdpy, EplSurface *psurf);

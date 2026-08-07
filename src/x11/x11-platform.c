@@ -1551,6 +1551,18 @@ EplQueryResult eplX11QuerySurface(EplDisplay *pdpy, EplSurface *psurf, EGLint at
         }
         return EPL_QUERY_RESULT_SUCCESS;
     }
+    else if (attrib == EGL_BUFFER_AGE_KHR)
+    {
+        if (psurf->type == EPL_SURFACE_TYPE_WINDOW)
+        {
+            *ret_value = eplX11GetWindowBufferAge(psurf);
+        }
+        else
+        {
+            *ret_value = 0;
+        }
+        return EPL_QUERY_RESULT_SUCCESS;
+    }
     else
     {
         return EPL_QUERY_RESULT_UNKNOWN;
