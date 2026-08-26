@@ -418,6 +418,10 @@ static EGLBoolean eplX11IsSameDisplay(EplPlatformData *plat, EplDisplay *pdpy, E
 
 /**
  * Finds an EGLDeviceEXT handle that corresponds to a given DRI device node.
+ *
+ * For each enumerated EGLDeviceEXT, both EGL_DRM_DEVICE_FILE_EXT (primary
+ * node) and EGL_DRM_RENDER_NODE_FILE_EXT (render node) are compared against
+ * @p node. The first EGLDeviceEXT with either string matching is returned.
  */
 static EGLDeviceEXT FindDeviceForNode(EplPlatformData *plat, const char *node)
 {
@@ -439,17 +443,25 @@ static EGLDeviceEXT FindDeviceForNode(EplPlatformData *plat, const char *node)
 
     for (i=0; i<num; i++)
     {
-        const char *str = plat->egl.QueryDeviceStringEXT(devices[i], EGL_EXTENSIONS);
-        if (!eplFindExtension("EGL_EXT_device_drm", str))
+        const char *extensions = plat->egl.QueryDeviceStringEXT(devices[i], EGL_EXTENSIONS);
+        if (eplFindExtension("EGL_EXT_device_drm", extensions))
         {
-            continue;
+            const char *str = plat->egl.QueryDeviceStringEXT(devices[i], EGL_DRM_DEVICE_FILE_EXT);
+            if ((str != NULL) && (strcmp(str, node) == 0))
+            {
+                found = devices[i];
+                break;
+            }
         }
 
-        str = plat->egl.QueryDeviceStringEXT(devices[i], EGL_DRM_DEVICE_FILE_EXT);
-        if (str != NULL && strcmp(str, node) == 0)
+        if (eplFindExtension("EGL_EXT_device_drm_render_node", extensions))
         {
-            found = devices[i];
-            break;
+            const char *str = plat->egl.QueryDeviceStringEXT(devices[i], EGL_DRM_RENDER_NODE_FILE_EXT);
+            if ((str != NULL) && (strcmp(str, node) == 0))
+            {
+                found = devices[i];
+                break;
+            }
         }
     }
 
@@ -514,7 +526,17 @@ static EGLDeviceEXT FindDeviceForFD(EplPlatformData *plat, int fd)
 
         if (isNV)
         {
+            /*
+             * Try the primary node first. If that doesn't match any
+             * enumerated EGLDeviceEXT fall back to the render node.
+             */
             found = FindDeviceForNode(plat, dev->nodes[DRM_NODE_PRIMARY]);
+            if ((found == EGL_NO_DEVICE_EXT) &&
+                ((dev->available_nodes & (1 << DRM_NODE_RENDER)) != 0) &&
+                (dev->nodes[DRM_NODE_RENDER] != NULL))
+            {
+                found = FindDeviceForNode(plat, dev->nodes[DRM_NODE_RENDER]);
+            }
         }
     }
 
