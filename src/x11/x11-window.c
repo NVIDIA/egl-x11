@@ -505,7 +505,7 @@ static EGLBoolean AllocWindowBuffers(EplSurface *surf,
     X11ColorBuffer *back = NULL;
     X11ColorBuffer *shared = NULL;
     EGLPlatformColorBufferNVX sharedBuf = NULL;
-    EGLBoolean success = EGL_TRUE;
+    EGLBoolean success = EGL_FALSE;
 
     front = AllocOneColorBuffer(pwin->inst, pwin->format->fmt, pwin->pending_width, pwin->pending_height,
             modifiers, num_modifiers, prime);
