@@ -1041,20 +1041,24 @@ static void SendPresentPixmap(EplSurface *surf, X11ColorBuffer *sharedPixmap, ui
     uint32_t numPending = pwin->last_present_serial - pwin->last_complete_serial;
     uint32_t targetMSC = 0;
     uint64_t divisor = 1;
+    EGLBoolean wants_async = pwin->swap_interval <= 0 ||
+                             options & XCB_PRESENT_OPTION_ASYNC ||
+                             options & XCB_PRESENT_OPTION_ASYNC_MAY_TEAR;
 
-    if (pwin->swap_interval <= 0)
-    {
-        options |= XCB_PRESENT_OPTION_ASYNC;
-    }
+    // Clear the ASYNC options since we'll figure out which ones we need below.
+    options &= ~(XCB_PRESENT_OPTION_ASYNC | XCB_PRESENT_OPTION_ASYNC_MAY_TEAR);
 
-    if (options & XCB_PRESENT_OPTION_ASYNC)
+    if (wants_async)
     {
-        // Make sure that the server actually supports the async flag. If it
-        // doesn't, then just remove it.
-        if (!(pwin->present_capabilities & XCB_PRESENT_CAPABILITY_ASYNC))
+        if (pwin->present_capabilities & XCB_PRESENT_CAPABILITY_ASYNC_MAY_TEAR)
         {
-            options &= ~XCB_PRESENT_OPTION_ASYNC;
+            options |= XCB_PRESENT_OPTION_ASYNC_MAY_TEAR;
         }
+        else if (pwin->present_capabilities & XCB_PRESENT_CAPABILITY_ASYNC)
+        {
+            options |= XCB_PRESENT_OPTION_ASYNC;
+        }
+
         targetMSC = 0;
     }
     else
