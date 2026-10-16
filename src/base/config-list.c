@@ -284,9 +284,26 @@ EplConfig **eplConfigListChooseConfigs(EplPlatformData *platform, EGLDisplay edp
     attribsCopy[numAttribs++] = EGL_DONT_CARE;
     attribsCopy[numAttribs] = EGL_NONE;
 
-    if (!platform->egl.ChooseConfig(edpy, attribsCopy, NULL, 0, &internalCount)
-            || internalCount <= 0)
+    if (!platform->egl.ChooseConfig(edpy, attribsCopy, NULL, 0, &internalCount))
     {
+        goto done;
+    }
+
+    /*
+     * Zero configs is a valid result meaning no configs match the
+     * requested attributes. Return success with an empty list.
+     */
+    if (internalCount == 0)
+    {
+        configs = malloc(sizeof(EplConfig *));
+        if (configs == NULL)
+        {
+            eplSetError(platform, EGL_BAD_ALLOC, "Out of memory");
+            goto done;
+        }
+        configs[0] = NULL;
+        matchCount = 0;
+        success = EGL_TRUE;
         goto done;
     }
 
@@ -298,8 +315,7 @@ EplConfig **eplConfigListChooseConfigs(EplPlatformData *platform, EGLDisplay edp
         goto done;
     }
 
-    if (!platform->egl.ChooseConfig(edpy, attribsCopy, internalConfigs, internalCount, &internalCount)
-            || internalCount <= 0)
+    if (!platform->egl.ChooseConfig(edpy, attribsCopy, internalConfigs, internalCount, &internalCount))
     {
         goto done;
     }
